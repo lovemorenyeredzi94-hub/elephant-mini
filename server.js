@@ -36,7 +36,7 @@ const {
     unmuteUserInDB,
     isUserMutedInDB,
     trackMessageForSpam
-} = require('./database');
+} = require('./lib./database');
 
 // ====================================
 // IMPORT HANDLER
