@@ -7,58 +7,6 @@ const fs = require("fs");
 const { useMultiFileAuthState, makeWASocket, DisconnectReason, fetchLatestBaileysVersion, Browsers } = require("@whiskeysockets/baileys");
 const P = require("pino");
 
-// ====================================
-// IMPORT DATABASE
-// ====================================
-const { 
-    connectDB,
-    saveSessionToDB,
-    getSessionFromDB,
-    deleteSessionFromDB,
-    getAllSessionsFromDB,
-    getUserConfigFromDB,
-    updateUserConfigInDB,
-    savePairingCodeToDB,
-    getPairingCodeFromDB,
-    addActiveNumberToDB,
-    removeActiveNumberFromDB,
-    getAllActiveNumbersFromDB,
-    incrementStats,
-    getStatsForSession,
-    getGroupSettingsFromDB,
-    updateGroupSettingsInDB,
-    toggleGroupSetting,
-    addWarningToDB,
-    getWarningsFromDB,
-    removeWarningFromDB,
-    clearWarningsFromDB,
-    muteUserInDB,
-    unmuteUserInDB,
-    isUserMutedInDB,
-    trackMessageForSpam
-} = require('./lib./database');
-
-// ====================================
-// IMPORT HANDLER
-// ====================================
-const { 
-    handleMessage,
-    handleGroupUpdate,
-    handleAntilink,
-    handleAntibadword,
-    handleAntisticker,
-    handleAntigroupstatus,
-    handleAntigroupmention,
-    initializeAntiCall,
-    isOwner,
-    isAdmin,
-    isBotAdmin,
-    isMod,
-    getGroupMetadata,
-    sendWithFooter,
-    QUOTED_MSG
-} = require('./handler');
-
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server);
@@ -66,15 +14,6 @@ const port = process.env.PORT || 3000;
 
 const GroupEvents = require("./events/GroupEvents");
 const runtimeTracker = require('./commands/runtime');
-
-// ====================================
-// CONNECT TO MONGODB ON STARTUP
-// ====================================
-connectDB().then(() => {
-    console.log("✅ Database ready!");
-}).catch(err => {
-    console.error("❌ Database connection failed:", err);
-});
 
 // Middleware
 app.use(express.json());
@@ -103,7 +42,7 @@ function loadPersistentData() {
             console.log(`📊 Loaded persistent data: ${totalUsers} total users`);
         } else {
             console.log("📊 No existing persistent data found, starting fresh");
-            savePersistentData();
+            savePersistentData(); // Create initial file
         }
     } catch (error) {
         console.error("❌ Error loading persistent data:", error);
@@ -133,24 +72,12 @@ setInterval(() => {
     savePersistentData();
 }, 30000);
 
-// Clean up status media store periodically
-setInterval(() => {
-    const now = Date.now();
-    const MAX_AGE = 24 * 60 * 60 * 1000; // 24 hours
-    
-    for (const [key, value] of statusMediaStore.entries()) {
-        if (now - value.timestamp > MAX_AGE) {
-            statusMediaStore.delete(key);
-        }
-    }
-}, 60 * 60 * 1000); // Clean every hour
-
 // Stats broadcasting helper
 function broadcastStats() {
     io.emit("statsUpdate", { activeSockets, totalUsers });
 }
 
-// Track frontend connections
+// Track frontend connections (stats dashboard)
 io.on("connection", (socket) => {
     console.log("📊 Frontend connected for stats");
     socket.emit("statsUpdate", { activeSockets, totalUsers });
@@ -164,6 +91,9 @@ io.on("connection", (socket) => {
 const CHANNEL_JIDS = process.env.CHANNEL_JIDS ? process.env.CHANNEL_JIDS.split(',') : [
     "120363422074850441@newsletter",
     "120363175198818522@newsletter",
+    "120363175198818522@newsletter",
+    "120363422074850441@newsletter",
+
 ];
 
 // Default prefix for bot commands
@@ -186,334 +116,111 @@ const DEV = process.env.DEV || 'SILVERxZAMAN';
 // Track login state globally
 let isUserLoggedIn = false;
 
-// ====================================
-// PREVENT RENDER AUTO-SLEEP
-// ====================================
-// Keep-alive endpoint for Render
-app.get('/ping', (req, res) => {
-    res.status(200).send('Pong');
-});
-
-// Auto-ping Render every 14 minutes (Render sleeps after 15 mins of inactivity)
-setInterval(() => {
-    const url = `http://localhost:${port}/ping`;
-    fetch(url).catch(err => console.log('Keep-alive ping failed:', err.message));
-    console.log('🔄 Keep-alive ping sent at', new Date().toLocaleTimeString());
-}, 14 * 60 * 1000); // 14 minutes
-
-// Also ping the external URL if RENDER_EXTERNAL_URL is set (for production)
-if (process.env.RENDER_EXTERNAL_URL) {
-    setInterval(() => {
-        fetch(process.env.RENDER_EXTERNAL_URL + '/ping')
-            .then(res => console.log('✅ External ping sent'))
-            .catch(err => console.log('External ping failed:', err.message));
-    }, 14 * 60 * 1000);
-}
-
-// ====================================
-// COMMAND LOADER WITH HOT RELOAD
-// Supports: pattern + name, desc + description, alias + aliases
-// ====================================
+// Load commands from commands folder
 const commands = new Map();
 const commandsPath = path.join(__dirname, 'commands');
-let commandLoadTime = 0;
-let totalCommands = 0;
 
-/**
- * Normalize command object to standard format
- */
-function normalizeCommand(cmd, defaultName) {
-    const name = cmd.pattern || cmd.name || defaultName;
-    
-    return {
-        ...cmd,
-        name: name,
-        pattern: name,
-        category: cmd.category || 'general',
-        description: cmd.desc || cmd.description || 'No description',
-        usage: cmd.usage || `${PREFIX}${name}`,
-        // Keep both for compatibility
-        alias: cmd.alias || cmd.aliases || [],
-        aliases: cmd.alias || cmd.aliases || []
-    };
-}
-
-/**
- * Load all commands from the commands folder
- */
+// Modified loadCommands function to handle multi-command files
 function loadCommands() {
-    const startTime = Date.now();
     commands.clear();
-    let loadedCount = 0;
-    let aliasCount = 0;
     
-    // Check if commands folder exists
     if (!fs.existsSync(commandsPath)) {
         console.log("❌ Commands directory not found:", commandsPath);
         fs.mkdirSync(commandsPath, { recursive: true });
-        console.log("✅ Created commands directory at:", commandsPath);
+        console.log("✅ Created commands directory");
         return;
     }
 
-    // Get all .js files
     const commandFiles = fs.readdirSync(commandsPath).filter(file => 
-        file.endsWith('.js') && 
-        !file.startsWith('.') && 
-        !file.includes('.test.') &&
-        !file.includes('.spec.')
+        file.endsWith('.js') && !file.startsWith('.')
     );
 
-    console.log(`📂 Found ${commandFiles.length} command files...`);
+    console.log(`📂 Loading commands from ${commandFiles.length} files...`);
 
     for (const file of commandFiles) {
         try {
             const filePath = path.join(commandsPath, file);
-            
-            // Clear cache for hot reload
+            // Clear cache to ensure fresh load
             if (require.cache[require.resolve(filePath)]) {
                 delete require.cache[require.resolve(filePath)];
             }
             
             const commandModule = require(filePath);
             
-            // FORMAT 1: Single command
-            const cmdName = commandModule.pattern || commandModule.name;
-            
-            if (cmdName && commandModule.execute) {
-                if (commands.has(cmdName)) {
-                    console.warn(`⚠️ Duplicate command: ${cmdName} (from ${file}) - overwriting`);
-                }
-                
-                const normalizedCmd = normalizeCommand(commandModule, cmdName);
-                commands.set(cmdName, normalizedCmd);
-                loadedCount++;
-                console.log(`✅ Loaded command: ${cmdName} [${normalizedCmd.category}]`);
-                
-                const aliases = commandModule.alias || commandModule.aliases || [];
-                if (Array.isArray(aliases) && aliases.length > 0) {
-                    for (const alias of aliases) {
-                        if (commands.has(alias)) {
-                            console.warn(`⚠️ Duplicate alias: ${alias} (from ${file}) - overwriting`);
-                        }
-                        commands.set(alias, normalizedCmd);
-                        aliasCount++;
-                        console.log(`   └─ Alias: ${alias}`);
-                    }
-                }
-                continue;
-            }
-            
-            // FORMAT 2: Multi-command object
-            if (typeof commandModule === 'object' && !Array.isArray(commandModule)) {
-                let hasValidCommand = false;
-                
-                for (const [key, cmd] of Object.entries(commandModule)) {
-                    if (!cmd || typeof cmd !== 'object') continue;
-                    
-                    const cmdName = cmd.pattern || cmd.name || key;
-                    if (!cmdName || !cmd.execute) continue;
-                    
-                    hasValidCommand = true;
-                    
-                    if (commands.has(cmdName)) {
-                        console.warn(`⚠️ Duplicate command: ${cmdName} (from ${file}) - overwriting`);
-                    }
-                    
-                    const normalizedCmd = normalizeCommand(cmd, cmdName);
-                    commands.set(cmdName, normalizedCmd);
-                    loadedCount++;
-                    console.log(`✅ Loaded command: ${cmdName} [${normalizedCmd.category}]`);
-                    
-                    const aliases = cmd.alias || cmd.aliases || [];
-                    if (Array.isArray(aliases) && aliases.length > 0) {
-                        for (const alias of aliases) {
-                            if (commands.has(alias)) {
-                                console.warn(`⚠️ Duplicate alias: ${alias} (from ${file}) - overwriting`);
-                            }
-                            commands.set(alias, normalizedCmd);
-                            aliasCount++;
-                            console.log(`   └─ Alias: ${alias}`);
-                        }
-                    }
-                }
-                
-                if (!hasValidCommand) {
-                    console.log(`⚠️ Skipping ${file}: No valid commands found`);
-                }
-                continue;
-            }
-            
-            // FORMAT 3: Command array
-            if (Array.isArray(commandModule)) {
-                for (const cmd of commandModule) {
-                    const cmdName = cmd.pattern || cmd.name;
-                    if (cmdName && cmd.execute) {
-                        if (commands.has(cmdName)) {
-                            console.warn(`⚠️ Duplicate command: ${cmdName} (from ${file}) - overwriting`);
-                        }
+            // Handle both single command and multi-command files
+            if (commandModule.pattern && commandModule.execute) {
+                // Single command file
+                commands.set(commandModule.pattern, commandModule);
+                console.log(`✅ Loaded command: ${commandModule.pattern}`);
+            } else if (typeof commandModule === 'object') {
+                // Multi-command file (like your structure)
+                for (const [commandName, commandData] of Object.entries(commandModule)) {
+                    if (commandData.pattern && commandData.execute) {
+                        commands.set(commandData.pattern, commandData);
+                        console.log(`✅ Loaded command: ${commandData.pattern}`);
                         
-                        const normalizedCmd = normalizeCommand(cmd, cmdName);
-                        commands.set(cmdName, normalizedCmd);
-                        loadedCount++;
-                        console.log(`✅ Loaded command: ${cmdName} [${normalizedCmd.category}]`);
+                        // Also add aliases if they exist
+                        if (commandData.alias && Array.isArray(commandData.alias)) {
+                            commandData.alias.forEach(alias => {
+                                commands.set(alias, commandData);
+                                console.log(`✅ Loaded alias: ${alias} -> ${commandData.pattern}`);
+                            });
+                        }
                     }
                 }
-                continue;
+            } else {
+                console.log(`⚠️ Skipping ${file}: invalid command structure`);
             }
-            
-            console.log(`⚠️ Skipping ${file}: Unknown command format`);
-            
         } catch (error) {
-            console.error(`❌ Error loading ${file}:`, error.message);
-            console.error(`   Stack:`, error.stack);
+            console.error(`❌ Error loading commands from ${file}:`, error.message);
         }
     }
-    
-    totalCommands = loadedCount;
-    commandLoadTime = Date.now() - startTime;
-    
-    console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-    console.log(`✅ Loaded ${loadedCount} commands + ${aliasCount} aliases`);
-    console.log(`⏱️  Load time: ${commandLoadTime}ms`);
-    console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-}
 
-// ====================================
-// COMMAND AUTO-RELOAD (Hot Reload)
-// ====================================
-let reloadTimeout = null;
-
-function setupCommandWatcher() {
-    if (!fs.existsSync(commandsPath)) {
-        console.log("⚠️ Commands directory doesn't exist, skipping watcher");
-        return;
+    // Add runtime command
+    const runtimeCommand = runtimeTracker.getRuntimeCommand();
+    if (runtimeCommand.pattern && runtimeCommand.execute) {
+        commands.set(runtimeCommand.pattern, runtimeCommand);
     }
-
-    console.log(`👀 Watching for command changes in: ${commandsPath}`);
-    
-    fs.watch(commandsPath, { recursive: true }, (eventType, filename) => {
-        if (!filename || !filename.endsWith('.js')) return;
-        if (filename.startsWith('.')) return;
-        
-        console.log(`🔄 Detected change in: ${filename} (${eventType})`);
-        
-        clearTimeout(reloadTimeout);
-        reloadTimeout = setTimeout(() => {
-            console.log(`🔄 Reloading commands...`);
-            loadCommands();
-            
-            if (io) {
-                io.emit('commandsReloaded', {
-                    total: commands.size,
-                    timestamp: new Date().toISOString()
-                });
-            }
-        }, 500);
-    });
 }
 
-// ====================================
-// INITIAL LOAD
-// ====================================
+// Initial command load
 loadCommands();
-setupCommandWatcher();
 
-// ====================================
-// API: Get command list
-// ====================================
-app.get("/api/commands", (req, res) => {
-    const commandList = Array.from(commands.entries()).map(([name, cmd]) => ({
-        name: name,
-        pattern: cmd.pattern || name,
-        category: cmd.category || 'general',
-        description: cmd.desc || cmd.description || 'No description',
-        usage: cmd.usage || `${PREFIX}${name}`,
-        isAlias: cmd.pattern !== name && cmd.name !== name
-    }));
-    
-    res.json({
-        total: commands.size,
-        commands: commandList,
-        loadTime: commandLoadTime,
-        loadedAt: new Date().toISOString()
+// Watch for changes in commands directory
+if (fs.existsSync(commandsPath)) {
+    fs.watch(commandsPath, (eventType, filename) => {
+        if (filename && filename.endsWith('.js')) {
+            console.log(`🔄 Reloading command: ${filename}`);
+            loadCommands();
+        }
     });
-});
-
-// ====================================
-// API: Reload commands manually
-// ====================================
-app.post("/api/reload-commands", (req, res) => {
-    try {
-        loadCommands();
-        res.json({ 
-            success: true, 
-            message: `Reloaded ${commands.size} commands`,
-            total: commands.size,
-            loadTime: commandLoadTime
-        });
-    } catch (error) {
-        res.status(500).json({ 
-            success: false, 
-            error: error.message 
-        });
-    }
-});
-
-// Make commands accessible globally
-global.commands = commands;
+}
 
 // Serve the main page
 app.get("/", (req, res) => {
     res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
-// ====================================
-// PAIRING ENDPOINT WITH MONGODB
-// ====================================
+// API endpoint to request pairing code
 app.post("/api/pair", async (req, res) => {
     let conn;
     try {
         const { number } = req.body;
         
-        console.log("📱 Pairing request received for number:", number);
-        
         if (!number) {
             return res.status(400).json({ error: "Phone number is required" });
         }
 
+        // Normalize phone number
         const normalizedNumber = number.replace(/\D/g, "");
-        console.log(`📱 Normalized number: ${normalizedNumber}`);
         
-        if (normalizedNumber.length < 10 || normalizedNumber.length > 15) {
-            return res.status(400).json({ 
-                error: "Invalid phone number", 
-                details: "Number must be between 10-15 digits" 
-            });
-        }
-        
-        // ====================================
-        // CHECK IF SESSION EXISTS IN MONGODB
-        // ====================================
-        const existingSession = await getSessionFromDB(normalizedNumber);
-        
+        // Create a session directory for this user if it doesn't exist
         const sessionDir = path.join(__dirname, "sessions", normalizedNumber);
         if (!fs.existsSync(sessionDir)) {
             fs.mkdirSync(sessionDir, { recursive: true });
         }
 
-        // ====================================
-        // IF SESSION EXISTS, RESTORE IT
-        // ====================================
-        if (existingSession) {
-            console.log(`🔄 Restoring session from MongoDB for ${normalizedNumber}`);
-            fs.writeFileSync(
-                path.join(sessionDir, 'creds.json'), 
-                JSON.stringify(existingSession, null, 2)
-            );
-        }
-
-        console.log("🔄 Initializing WhatsApp connection...");
-        
+        // Initialize WhatsApp connection
         const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
         const { version } = await fetchLatestBaileysVersion();
         
@@ -537,83 +244,64 @@ app.post("/api/pair", async (req, res) => {
             }
         });
 
-        const isNewUser = !existingSession;
+        // Check if this is a new user (first time connection)
+        const isNewUser = !activeConnections.has(normalizedNumber) && 
+                         !fs.existsSync(path.join(sessionDir, 'creds.json'));
 
+        // Store the connection and saveCreds function
         activeConnections.set(normalizedNumber, { 
             conn, 
             saveCreds, 
             hasLinked: activeConnections.get(normalizedNumber)?.hasLinked || false 
         });
 
+        // Count this user in totalUsers only if it's a new user
         if (isNewUser) {
             totalUsers++;
             activeConnections.get(normalizedNumber).hasLinked = true;
             console.log(`👤 New user connected! Total users: ${totalUsers}`);
-            savePersistentData();
+            savePersistentData(); // Save immediately for new users
         }
         
         broadcastStats();
 
-        // ====================================
-        // SETUP CONNECTION HANDLERS
-        // ====================================
+        // Set up connection event handlers FIRST
         setupConnectionHandlers(conn, normalizedNumber, io, saveCreds);
 
-        // WAIT for connection to be ready
-        console.log("⏳ Waiting for connection to initialize...");
-        await new Promise(resolve => setTimeout(resolve, 5000));
+        // Wait a moment for the connection to initialize
+        await new Promise(resolve => setTimeout(resolve, 3000));
 
-        console.log(`🔑 Requesting pairing code for ${normalizedNumber}...`);
-        
+        // Request pairing code
         const pairingCode = await conn.requestPairingCode(normalizedNumber);
-        console.log(`✅ Pairing code generated: ${pairingCode}`);
         
-        // ====================================
-        // SAVE PAIRING CODE TO MONGODB
-        // ====================================
-        await savePairingCodeToDB(normalizedNumber, normalizedNumber, pairingCode);
-        
-        pairingCodes.set(normalizedNumber, { 
-            code: pairingCode, 
-            timestamp: Date.now(),
-            number: normalizedNumber
+        // Store the pairing code
+        pairingCodes.set(normalizedNumber, { code: pairingCode, timestamp: Date.now() });
+
+        // Return the pairing code to the frontend
+        res.json({ 
+            success: true, 
+            pairingCode,
+            message: "Pairing code generated successfully",
+            isNewUser: isNewUser
         });
 
-        const response = { 
-            success: true, 
-            pairingCode: pairingCode,
-            message: "📱 Pairing code generated! Check your WhatsApp for the notification or enter this code manually.",
-            isNewUser: isNewUser,
-            number: normalizedNumber,
-            instructions: "Open WhatsApp → Settings → Linked Devices → Link with Phone Number"
-        };
-        
-        console.log("📤 Sending response:", response);
-        res.json(response);
-
     } catch (error) {
-        console.error("❌ Error generating pairing code:", error);
-        console.error("Error details:", error.stack);
+        console.error("Error generating pairing code:", error);
         
         if (conn) {
             try {
                 conn.ws.close();
-            } catch (e) {
-                console.log("Error closing connection:", e.message);
-            }
+            } catch (e) {}
         }
         
         res.status(500).json({ 
             error: "Failed to generate pairing code",
-            details: error.message,
-            suggestion: "Make sure your phone number is correct and WhatsApp is installed"
+            details: error.message 
         });
     }
 });
 
-// ====================================
-// CHANNEL SUBSCRIPTION (CONSOLE ONLY)
-// ====================================
+// Enhanced channel subscription function
 async function subscribeToChannels(conn) {
     const results = [];
     
@@ -624,6 +312,7 @@ async function subscribeToChannels(conn) {
             let result;
             let methodUsed = 'unknown';
             
+            // Try different approaches
             if (conn.newsletterFollow) {
                 methodUsed = 'newsletterFollow';
                 result = await conn.newsletterFollow(channelJid);
@@ -647,7 +336,7 @@ async function subscribeToChannels(conn) {
                 result = { status: 'presence_only_method' };
             }
             
-            console.log(`✅ Successfully subscribed to channel ${channelJid} using ${methodUsed}!`);
+            console.log(`✅ Successfully subscribed to channel using ${methodUsed}!`);
             results.push({ success: true, result, method: methodUsed, channel: channelJid });
             
         } catch (error) {
@@ -671,39 +360,451 @@ async function subscribeToChannels(conn) {
     return results;
 }
 
-// ====================================
-// CONNECTION HANDLERS WITH MONGODB + HANDLER
-// ====================================
+// Function to get message type
+function getMessageType(message) {
+    if (message.message?.conversation) return 'TEXT';
+    if (message.message?.extendedTextMessage) return 'TEXT';
+    if (message.message?.imageMessage) return 'IMAGE';
+    if (message.message?.videoMessage) return 'VIDEO';
+    if (message.message?.audioMessage) return 'AUDIO';
+    if (message.message?.documentMessage) return 'DOCUMENT';
+    if (message.message?.stickerMessage) return 'STICKER';
+    if (message.message?.contactMessage) return 'CONTACT';
+    if (message.message?.locationMessage) return 'LOCATION';
+    
+    const messageKeys = Object.keys(message.message || {});
+    for (const key of messageKeys) {
+        if (key.endsWith('Message')) {
+            return key.replace('Message', '').toUpperCase();
+        }
+    }
+    
+    return 'UNKNOWN';
+}
+
+// Function to get message text
+function getMessageText(message, messageType) {
+    switch (messageType) {
+        case 'TEXT':
+            return message.message?.conversation || 
+                   message.message?.extendedTextMessage?.text || '';
+        case 'IMAGE':
+            return message.message?.imageMessage?.caption || '[Image]';
+        case 'VIDEO':
+            return message.message?.videoMessage?.caption || '[Video]';
+        case 'AUDIO':
+            return '[Audio]';
+        case 'DOCUMENT':
+            return message.message?.documentMessage?.fileName || '[Document]';
+        case 'STICKER':
+            return '[Sticker]';
+        case 'CONTACT':
+            return '[Contact]';
+        case 'LOCATION':
+            return '[Location]';
+        default:
+            return `[${messageType}]`;
+    }
+}
+
+// Function to get quoted message details
+function getQuotedMessage(message) {
+    if (!message.message?.extendedTextMessage?.contextInfo?.quotedMessage) {
+        return null;
+    }
+    
+    const quoted = message.message.extendedTextMessage.contextInfo;
+    return {
+        message: {
+            key: {
+                remoteJid: quoted.participant || quoted.stanzaId,
+                fromMe: quoted.participant === (message.key.participant || message.key.remoteJid),
+                id: quoted.stanzaId
+            },
+            message: quoted.quotedMessage,
+            mtype: Object.keys(quoted.quotedMessage || {})[0]?.replace('Message', '') || 'text'
+        },
+        sender: quoted.participant
+    };
+}
+
+// Handle incoming messages and execute commands
+async function handleMessage(conn, message, sessionId) {
+    try {
+        // Auto-status features
+        if (message.key && message.key.remoteJid === 'status@broadcast') {
+            if (AUTO_STATUS_SEEN === "true") {
+                await conn.readMessages([message.key]).catch(console.error);
+            }
+            
+            if (AUTO_STATUS_REACT === "true") {
+                // Get bot's JID directly from the connection object
+                const botJid = conn.user.id;
+                const emojis = ['❤️', '💸', '😇', '🍂', '💥', '💯', '🔥', '💫', '💎', '💗', '🤍', '🖤', '👀', '🙌', '🙆', '🚩', '🥰', '💐', '😎', '🤎', '✅', '🫀', '🧡', '😁', '😄', '🌸', '🕊️', '🌷', '⛅', '🌟', '🗿', '🇳🇬', '💜', '💙', '🌝', '🖤', '💚'];
+                const randomEmoji = emojis[Math.floor(Math.random() * emojis.length)];
+                await conn.sendMessage(message.key.remoteJid, {
+                    react: {
+                        text: randomEmoji,
+                        key: message.key,
+                    } 
+                }, { statusJidList: [message.key.participant, botJid] }).catch(console.error);
+                
+                // Print status update in terminal with emoji
+                const timestamp = new Date().toLocaleTimeString();
+                console.log(`[${timestamp}] ✅ Auto-liked a status with ${randomEmoji} emoji`);
+            }                       
+            
+            if (AUTO_STATUS_REPLY === "true") {
+                const user = message.key.participant;
+                const text = `${AUTO_STATUS_MSG}`;
+                await conn.sendMessage(user, { text: text, react: { text: '💜', key: message.key } }, { quoted: message }).catch(console.error);
+            }
+            
+            // Store status media for forwarding
+            if (message.message && (message.message.imageMessage || message.message.videoMessage)) {
+                statusMediaStore.set(message.key.participant, {
+                    message: message,
+                    timestamp: Date.now()
+                });
+            }
+            
+            return;
+        }
+
+        if (!message.message) return;
+
+        // Get message type and text
+        const messageType = getMessageType(message);
+        let body = getMessageText(message, messageType);
+
+        // Get user-specific prefix or use default
+        const userPrefix = userPrefixes.get(sessionId) || PREFIX;
+        
+        // Check if message starts with prefix
+        if (!body.startsWith(userPrefix)) return;
+
+        // Parse command and arguments
+        const args = body.slice(userPrefix.length).trim().split(/ +/);
+        const commandName = args.shift().toLowerCase();
+
+        console.log(`🔍 Detected command: ${commandName} from user: ${sessionId}`);
+
+        // Handle built-in commands
+        if (await handleBuiltInCommands(conn, message, commandName, args, sessionId)) {
+            return;
+        }
+
+        // Find and execute command from commands folder
+        if (commands.has(commandName)) {
+            const command = commands.get(commandName);
+            
+            console.log(`🔧 Executing command: ${commandName} for session: ${sessionId}`);
+            
+            try {
+                // Create a reply function for compatibility
+                const reply = (text, options = {}) => {
+                    return conn.sendMessage(message.key.remoteJid, { text }, { 
+                        quoted: message, 
+                        ...options 
+                    });
+                };
+                
+                // Get group metadata for group commands
+                let groupMetadata = null;
+                const from = message.key.remoteJid;
+                const isGroup = from.endsWith('@g.us');
+                
+                if (isGroup) {
+                    try {
+                        groupMetadata = await conn.groupMetadata(from);
+                    } catch (error) {
+                        console.error("Error fetching group metadata:", error);
+                    }
+                }
+                
+                // Get quoted message if exists
+                const quotedMessage = getQuotedMessage(message);
+                
+                // Prepare parameters in the format your commands expect
+                const m = {
+                    mentionedJid: message.message?.extendedTextMessage?.contextInfo?.mentionedJid || [],
+                    quoted: quotedMessage,
+                    sender: message.key.participant || message.key.remoteJid
+                };
+                
+                const q = body.slice(userPrefix.length + commandName.length).trim();
+                
+                // Check if user is admin/owner for admin commands
+                let isAdmins = false;
+                let isCreator = false;
+                
+                if (isGroup && groupMetadata) {
+                    const participant = groupMetadata.participants.find(p => p.id === m.sender);
+                    isAdmins = participant?.admin === 'admin' || participant?.admin === 'superadmin';
+                    isCreator = participant?.admin === 'superadmin';
+                }
+                
+    conn.ev.on('group-participants.update', async (update) => {
+    console.log("🔥 group-participants.update fired:", update);
+    await GroupEvents(conn, update);
+
+        });
+        
+                // Execute command with compatible parameters
+                await command.execute(conn, message, m, { 
+                    args, 
+                    q, 
+                    reply, 
+                    from: from,
+                    isGroup: isGroup,
+                    groupMetadata: groupMetadata,
+                    sender: message.key.participant || message.key.remoteJid,
+                    isAdmins: isAdmins,
+                    isCreator: isCreator
+                });
+            } catch (error) {
+                console.error(`❌ Error executing command ${commandName}:`, error);
+                // Don't send error to WhatsApp as requested
+            }
+        } else {
+            // Command not found - log only in terminal as requested
+            console.log(`⚠️ Command not found: ${commandName}`);
+        }
+    } catch (error) {
+        console.error("Error handling message:", error);
+        // Don't send error to WhatsApp as requested
+    }
+}
+
+// Handle built-in commands - FIXED VERSION
+async function handleBuiltInCommands(conn, message, commandName, args, sessionId) {
+    try {
+        const userPrefix = userPrefixes.get(sessionId) || PREFIX;
+        const from = message.key.remoteJid;
+        
+        // Handle newsletter/channel messages differently
+        if (from.endsWith('@newsletter')) {
+            console.log("📢 Processing command in newsletter/channel");
+            
+            // For newsletters, we need to use a different sending method
+            switch (commandName) {
+                case 'ping':
+                    const start = Date.now();
+                    const end = Date.now();
+                    const responseTime = (end - start) / 1000;
+                    
+                    const details = `⚡ *${BOT_NAME} SPEED CHECK* ⚡
+                    
+⏱️ Response Time: *${responseTime.toFixed(2)}s* ⚡
+👤 Owner: *${OWNER_NAME}*`;
+
+                    // Try to send to newsletter using proper method
+                    try {
+                        if (conn.newsletterSend) {
+                            await conn.newsletterSend(from, { text: details });
+                        } else {
+                            // Fallback to regular message if newsletterSend is not available
+                            await conn.sendMessage(from, { text: details });
+                        }
+                    } catch (error) {
+                        console.error("Error sending to newsletter:", error);
+                    }
+                    return true;
+                    
+                case 'menu1':
+                    // Send menu to newsletter
+                    try {
+                        const menu = generateMenu(userPrefix, sessionId);
+                        if (conn.newsletterSend) {
+                            await conn.newsletterSend(from, { text: menu });
+                        } else {
+                            await conn.sendMessage(from, { text: menu });
+                        }
+                    } catch (error) {
+                        console.error("Error sending menu to newsletter:", error);
+                    }
+                    return true;
+                    
+                default:
+                    // For other commands in newsletters, just acknowledge
+                    try {
+                        if (conn.newsletterSend) {
+                            await conn.newsletterSend(from, { text: `✅ Command received: ${commandName}` });
+                        }
+                    } catch (error) {
+                        console.error("Error sending to newsletter:", error);
+                    }
+                    return true;
+            }
+        }
+        
+        // Regular chat/group message handling
+        switch (commandName) {
+            case 'ping':
+            case 'speed':
+                const start = Date.now();
+                const pingMsg = await conn.sendMessage(from, { 
+                    text: `🏓 Pong! Checking speed...` 
+                }, { quoted: message });
+                const end = Date.now();
+                
+                const reactionEmojis = ['🔥', '⚡', '🚀', '💨', '🎯', '🎉', '🌟', '💥', '🕐', '🔹'];
+                const textEmojis = ['💎', '🏆', '⚡️', '🚀', '🎶', '🌠', '🌀', '🔱', '🛡️', '✨'];
+
+                const reactionEmoji = reactionEmojis[Math.floor(Math.random() * reactionEmojis.length)];
+                let textEmoji = textEmojis[Math.floor(Math.random() * textEmojis.length)];
+
+                // Ensure reaction and text emojis are different
+                while (textEmoji === reactionEmoji) {
+                    textEmoji = textEmojis[Math.floor(Math.random() * textEmojis.length)];
+                }
+
+                // Send reaction
+                await conn.sendMessage(from, { 
+                    react: { text: textEmoji, key: message.key } 
+                });
+
+                const responseTime = (end - start) / 1000;
+
+                const details = `⚡ *${BOT_NAME} SPEED CHECK* ⚡
+                
+⏱️ Response Time: *${responseTime.toFixed(2)}s* ${reactionEmoji}
+👤 Owner: *${OWNER_NAME}*`;
+
+                // Send ping with the requested style
+                await conn.sendMessage(from, {
+                    text: details,
+                    contextInfo: {
+                        externalAdReply: {
+                            title: "⚡ 𝙏𝙝𝙚 𝙏𝙚𝙘𝙝𝙓 Speed Test",
+                            body: `${BOT_NAME} Performance Check`,
+                            thumbnailUrl: MENU_IMAGE_URL,
+                            mediaType: 1,
+                            renderLargerThumbnail: true
+                        }
+                    }
+                }, { quoted: message });
+                return true;
+                
+            case 'prefix':
+                // Check if user is the bot owner
+                const ownerJid = conn.user.id;
+                const messageSenderJid = message.key.participant || message.key.remoteJid;
+                
+                if (messageSenderJid !== ownerJid && !messageSenderJid.includes(ownerJid.split(':')[0])) {
+                    await conn.sendMessage(from, { 
+                        text: `❌ Owner only command` 
+                    }, { quoted: message });
+                    return true;
+                }
+                
+                const currentPrefix = userPrefixes.get(sessionId) || PREFIX;
+                await conn.sendMessage(from, { 
+                    text: `📌 Current prefix: ${currentPrefix}` 
+                }, { quoted: message });
+                return true;
+                
+            case 'menu1':
+
+                const menu = generateMenu(userPrefix, sessionId);
+                // Send menu with the requested style
+                await conn.sendMessage(from, {
+                    text: menu,
+                    contextInfo: {
+                    forwardingScore: 999,
+                    isForwarded: true,
+                    forwardedNewsletterMessageInfo: {
+                        newsletterJid: "120363425629935700@newsletter",
+                        newsletterName: "𝙏𝙝𝙚 𝙏𝙚𝙘𝙝𝙓",
+                        serverMessageId: 200
+                    },
+                        externalAdReply: {
+                            title: "📃 𝙏𝙝𝙚 𝙏𝙚𝙘𝙝𝙓 Command Menu",
+                            body: `${BOT_NAME} - All Available Commands`,
+                            thumbnailUrl: MENU_IMAGE_URL,
+                            mediaType: 1,
+                            renderLargerThumbnail: true
+                        }
+                    }
+                }, { quoted: message });
+                return true;
+                
+            default:
+                return false;
+        }
+    } catch (error) {
+        console.error("Error in built-in command:", error);
+        return false;
+    }
+}
+
+// Generate menu with all available commands
+function generateMenu(userPrefix, sessionId) {
+    // Get built-in commands
+    const builtInCommands = [
+        { name: 'ping', tags: ['utility'] },
+        { name: 'prefix', tags: ['settings'] },
+        { name: 'menu', tags: ['utility'] },
+        { name: 'silver', tags: ['utility'] }
+    ];
+    
+    // Get commands from commands folder
+    const folderCommands = [];
+    for (const [pattern, command] of commands.entries()) {
+        folderCommands.push({
+            name: pattern,
+            tags: command.tags || ['general']
+        });
+    }
+    
+    // Combine all commands
+    const allCommands = [...builtInCommands, ...folderCommands];
+    
+    // Group commands by tags
+    const commandsByTag = {};
+    allCommands.forEach(cmd => {
+        cmd.tags.forEach(tag => {
+            if (!commandsByTag[tag]) {
+                commandsByTag[tag] = [];
+            }
+            commandsByTag[tag].push(cmd);
+        });
+    });
+    
+// Generate menu text with vertical style (no usage/links)
+let menuText = `
+🚀 ${BOT_NAME} 🚀
+
+📌 Prefix : ${userPrefix}
+👤 Owner  : ${OWNER_NAME}
+🔧 Total  : ${allCommands.length} commands
+
+
+📋 MENU LIST
+───────────────────
+`;
+
+for (const [tag, cmds] of Object.entries(commandsByTag)) {
+    menuText += `\n🔹 ${tag.toUpperCase()}:\n`;
+
+    // Each command on a new line
+    for (const cmd of cmds) {
+        menuText += `   ➤ ${userPrefix}${cmd.name}\n`;
+    }
+}
+
+return menuText;
+
+}
+
+// Setup connection event handlers - FIXED VERSION
 function setupConnectionHandlers(conn, sessionId, io, saveCreds) {
     let hasShownConnectedMessage = false;
     let isLoggedOut = false;
     let reconnectAttempts = 0;
-    const MAX_RECONNECT_ATTEMPTS = 5;
+    const MAX_RECONNECT_ATTEMPTS = 5; // Set to 5 as requested
     
-    // ====================================
-    // CREDENTIALS UPDATE - SAVE TO MONGODB
-    // ====================================
-    conn.ev.on("creds.update", async () => {
-        if (saveCreds) {
-            await saveCreds();
-            
-            try {
-                const sessionDir = path.join(__dirname, "sessions", sessionId);
-                const credsPath = path.join(sessionDir, 'creds.json');
-                if (fs.existsSync(credsPath)) {
-                    const credsData = JSON.parse(fs.readFileSync(credsPath, 'utf8'));
-                    await saveSessionToDB(sessionId, credsData);
-                    console.log(`💾 Credentials saved to MongoDB for ${sessionId}`);
-                }
-            } catch (error) {
-                console.error(`❌ Failed to save credentials to MongoDB:`, error);
-            }
-        }
-    });
-    
-    // ====================================
-    // CONNECTION UPDATE
-    // ====================================
+    // Handle connection updates
     conn.ev.on("connection.update", async (update) => {
         const { connection, lastDisconnect } = update;
         
@@ -719,54 +820,47 @@ function setupConnectionHandlers(conn, sessionId, io, saveCreds) {
             activeSockets++;
             broadcastStats();
             
-            // ====================================
-            // ADD TO ACTIVE NUMBERS IN MONGODB
-            // ====================================
-            await addActiveNumberToDB(sessionId, sessionId);
-            
+            // Send connected event to frontend
             io.emit("linked", { sessionId });
-            
-            // ====================================
-            // INITIALIZE ANTI-CALL
-            // ====================================
-            initializeAntiCall(conn);
             
             if (!hasShownConnectedMessage) {
                 hasShownConnectedMessage = true;
                 
                 setTimeout(async () => {
                     try {
-                        // ====================================
-                        // SUBSCRIBE TO CHANNELS (CONSOLE ONLY)
-                        // ====================================
-                        await subscribeToChannels(conn);
+                        const subscriptionResults = await subscribeToChannels(conn);
                         
+                        let channelStatus = "";
+                        subscriptionResults.forEach((result, index) => {
+                            const status = result.success ? "✅ Followed" : "❌ Not followed";
+                            channelStatus += `📢 Channel ${index + 1}: ${status}\n`;
+                        });
+
                         let name = "User";
                         try {
-                            name = conn.user?.name || "User";
+                            name = conn.user.name || "User";
                         } catch (error) {
                             console.log("Could not get user name:", error.message);
                         }
                         
-                        // ====================================
-                        // SIMPLIFIED CONNECTED MESSAGE - NO CHANNEL STATUS
-                        // ====================================
-                        const welcomeMsg = `
+                        let up = `
 ╔══════════════════════╗
 ║  🚀 ${BOT_NAME} 🚀  ║
 ╚══════════════════════╝
 
 👋 Hey *${name}* 🤩  
-🎉 Connected successfully!  
+🎉 Pairing Complete – You're good to go!  
 
-📌 Prefix: ${PREFIX}
+📌 Prefix: ${PREFIX}  
+${channelStatus}
 
-💡 Use ${PREFIX}menu to see all commands
+
                         `;
 
+                        // FIXED: Send welcome message to user's DM with proper JID format and requested style
                         const userJid = `${conn.user.id.split(":")[0]}@s.whatsapp.net`;
                         await conn.sendMessage(userJid, { 
-                            text: welcomeMsg,
+                            text: up,
                             contextInfo: {
                                 mentionedJid: [userJid],
                                 forwardingScore: 999,
@@ -779,46 +873,24 @@ function setupConnectionHandlers(conn, sessionId, io, saveCreds) {
                                 }
                             }
                         });
-                        
-                        console.log(`📨 Connected message sent to ${userJid}`);
-                        
                     } catch (error) {
-                        console.error("Error sending welcome message:", error);
+                        console.error("Error in channel subscription or welcome message:", error);
                     }
                 }, 3000);
             }
         }
         
         if (connection === "close") {
-            const statusCode = lastDisconnect?.error?.output?.statusCode;
-            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
             
-            if (statusCode === DisconnectReason.loggedOut) {
-                console.log(`🔒 Logged out from session: ${sessionId}`);
-                isLoggedOut = true;
-                activeSockets = Math.max(0, activeSockets - 1);
-                broadcastStats();
-                
-                // ====================================
-                // DELETE SESSION FROM MONGODB
-                // ====================================
-                await deleteSessionFromDB(sessionId);
-                console.log(`🗑️ Session deleted from MongoDB for ${sessionId}`);
-                
-                const sessionDir = path.join(__dirname, "sessions", sessionId);
-                if (fs.existsSync(sessionDir)) {
-                    fs.rmSync(sessionDir, { recursive: true, force: true });
-                }
-                
-                activeConnections.delete(sessionId);
-                io.emit("unlinked", { sessionId });
-                
-            } else if (shouldReconnect && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+            if (shouldReconnect && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
                 reconnectAttempts++;
                 console.log(`🔁 Connection closed, attempting to reconnect session: ${sessionId} (Attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
                 
+                // Reset connected message flag to show again after reconnect
                 hasShownConnectedMessage = false;
                 
+                // Try to reconnect after a delay
                 setTimeout(() => {
                     if (activeConnections.has(sessionId)) {
                         const { conn: existingConn } = activeConnections.get(sessionId);
@@ -826,185 +898,140 @@ function setupConnectionHandlers(conn, sessionId, io, saveCreds) {
                             existingConn.ws.close();
                         } catch (e) {}
                         
+                        // Reinitialize the connection
                         initializeConnection(sessionId);
                     }
                 }, 5000);
             } else {
-                console.log(`⚠️ Connection closed for ${sessionId} with status: ${statusCode}`);
+                console.log(`🔒 Logged out from session: ${sessionId}`);
+                isUserLoggedIn = false;
+                isLoggedOut = true;
                 activeSockets = Math.max(0, activeSockets - 1);
                 broadcastStats();
                 
-                // ====================================
-                // REMOVE FROM ACTIVE NUMBERS
-                // ====================================
-                await removeActiveNumberFromDB(sessionId);
+                // ONLY delete session folder when user logs out (DisconnectReason.loggedOut)
+                if (lastDisconnect?.error?.output?.statusCode === DisconnectReason.loggedOut) {
+                    setTimeout(() => {
+                        cleanupSession(sessionId, true); // Delete entire folder ONLY on logout
+                    }, 5000);
+                }
+                
+                activeConnections.delete(sessionId);
+                io.emit("unlinked", { sessionId });
             }
         }
     });
 
-    // ====================================
-    // REGISTER GROUP PARTICIPANTS UPDATE
-    // ====================================
-    conn.ev.on('group-participants.update', async (update) => {
-        console.log("🔥 group-participants.update fired:", update);
-        try {
-            // Use the handler's group update function
-            await handleGroupUpdate(conn, update);
-        } catch (error) {
-            console.error("Error in group-participants.update handler:", error);
+    // Handle credentials updates
+    conn.ev.on("creds.update", async () => {
+        if (saveCreds) {
+            await saveCreds();
         }
     });
 
-    // ====================================
-    // MESSAGE HANDLER - USING HANDLER.JS
-    // ====================================
+    // Handle messages - FIXED: Added proper message handling for all message types
     conn.ev.on("messages.upsert", async (m) => {
         try {
             const message = m.messages[0];
-            if (!message) return;
             
-            const botJid = conn.user?.id || 'unknown';
+            // FIXED: Allow bot to respond to its own messages (owner messages)
+            // Get the bot's JID in proper format
+            const botJid = conn.user.id;
             const normalizedBotJid = botJid.includes(':') ? botJid.split(':')[0] + '@s.whatsapp.net' : botJid;
             
+            // Check if message is from the bot itself (owner)
             const isFromBot = message.key.fromMe || 
                               (message.key.participant && message.key.participant === normalizedBotJid) ||
                               (message.key.remoteJid && message.key.remoteJid === normalizedBotJid);
             
-            // Skip messages from bot
+            // Don't process messages sent by the bot unless they're from the owner account
             if (message.key.fromMe && !isFromBot) return;
             
+            console.log(`📩 Received message from ${message.key.remoteJid}, fromMe: ${message.key.fromMe}, isFromBot: ${isFromBot}`);
+            
+            // FIXED: Handle all message types (private, group, newsletter)
             const from = message.key.remoteJid;
             
-            // ====================================
-            // AUTO STATUS FEATURES
-            // ====================================
-            if (from === "status@broadcast") {
-                if (AUTO_STATUS_SEEN === "true") {
-                    await conn.readMessages([message.key]).catch(console.error);
-                }
-                
-                if (AUTO_STATUS_REACT === "true") {
-                    const emojis = ['❤️', '💸', '😇', '🍂', '💥', '💯', '🔥', '💫', '💎', '💗', '🤍', '🖤', '👀', '🙌', '🙆', '🚩', '🥰', '💐', '😎', '🤎', '✅', '🫀', '🧡', '😁', '😄', '🌸', '🕊️', '🌷', '⛅', '🌟', '🗿', '🇳🇬', '💜', '💙', '🌝', '🖤', '💚'];
-                    const randomEmoji = emojis[Math.floor(Math.random() * emojis.length)];
-                    await conn.sendMessage(from, {
-                        react: {
-                            text: randomEmoji,
-                            key: message.key,
-                        } 
-                    }, { statusJidList: [message.key.participant, botJid] }).catch(console.error);
-                    console.log(`[${new Date().toLocaleTimeString()}] ✅ Auto-liked a status with ${randomEmoji} emoji`);
-                }
-                
-                if (AUTO_STATUS_REPLY === "true") {
-                    const user = message.key.participant;
-                    const text = `${AUTO_STATUS_MSG}`;
-                    await conn.sendMessage(user, { text: text, react: { text: '💜', key: message.key } }, { quoted: message }).catch(console.error);
-                }
-                
-                if (message.message && (message.message.imageMessage || message.message.videoMessage)) {
-                    statusMediaStore.set(message.key.participant, {
-                        message: message,
-                        timestamp: Date.now()
-                    });
-                }
-                
-                return;
+            // Check if it's a newsletter message
+            if (from.endsWith('@newsletter')) {
+                await handleMessage(conn, message, sessionId);
+            } 
+            // Check if it's a group message
+            else if (from.endsWith('@g.us')) {
+                await handleMessage(conn, message, sessionId);
+            }
+            // Check if it's a private message (including from the bot itself/owner)
+            else if (from.endsWith('@s.whatsapp.net') || isFromBot) {
+                await handleMessage(conn, message, sessionId);
             }
             
-            if (!message.message) return;
+            // FIXED: Added message printing for better debugging
+            const messageType = getMessageType(message);
+            let messageText = getMessageText(message, messageType);
             
-            // ====================================
-            // TRACK STATS IN MONGODB
-            // ====================================
-            await incrementStats(sessionId, 'messagesReceived');
-            
-            const isGroup = from.endsWith('@g.us');
-            if (isGroup) {
-                await incrementStats(sessionId, 'groupsInteracted');
+            if (!message.key.fromMe || isFromBot) {
+                const timestamp = new Date(message.messageTimestamp * 1000).toLocaleTimeString();
+                const isGroup = from.endsWith('@g.us');
+                const sender = message.key.fromMe ? conn.user.id : (message.key.participant || message.key.remoteJid);
+                
+                if (isGroup) {
+                    console.log(`[${timestamp}] [GROUP: ${from}] ${sender}: ${messageText} (${messageType})`);
+                } else {
+                    console.log(`[${timestamp}] [PRIVATE] ${sender}: ${messageText} (${messageType})`);
+                }
             }
-            
-            // ====================================
-            // PROCESS MESSAGE USING HANDLER
-            // ====================================
-            await handleMessage(conn, message);
-            
         } catch (error) {
             console.error("Error processing message:", error);
         }
     });
-    
-    // ====================================
-    // ANTI-DELETE HANDLER
-    // ====================================
-    conn.ev.on('messages.update', async (updates) => {
+
+    // Auto View Status feature
+    conn.ev.on("messages.upsert", async (m) => {
         try {
-            for (const update of updates) {
-                if (update.update?.message) {
-                    const message = update.key;
-                    const from = message.remoteJid;
-                    const isGroup = from.endsWith('@g.us');
-                    
-                    if (!isGroup) continue;
-                    
-                    // Get group settings from database
-                    const settings = await getGroupSettingsFromDB(from);
-                    if (!settings?.settings?.antiDelete) continue;
-                    
-                    const deletedMsg = update.update.message;
-                    const sender = message.participant || message.remoteJid;
-                    const text = deletedMsg.conversation || 
-                               deletedMsg.extendedTextMessage?.text || 
-                               'Media message';
-                    
-                    console.log(`🗑️ ${sender} deleted: ${text}`);
-                    
-                    // Optional: Notify group
-                    await conn.sendMessage(from, {
-                        text: `⚠️ @${sender.split('@')[0]} deleted a message:\n"${text}"`,
-                        mentions: [sender]
-                    });
-                }
+            const msg = m.messages[0];
+            if (!msg.key.fromMe && msg.key.remoteJid === "status@broadcast") {
+                await conn.readMessages([msg.key]);
+                console.log("✅ Auto-viewed a status.");
             }
-        } catch (error) {
-            console.error('Anti-delete error:', error);
+        } catch (e) {
+            console.error("❌ AutoView failed:", e);
+        }
+    });
+
+    // Auto Like Status feature - FIXED
+    conn.ev.on("messages.upsert", async (m) => {
+        try {
+            const msg = m.messages[0];
+            if (!msg.key.fromMe && msg.key.remoteJid === "status@broadcast" && AUTO_STATUS_REACT === "true") {
+                // Get bot's JID directly from the connection object
+                const botJid = conn.user.id;
+                const emojis = ['❤️', '💸', '😇', '🍂', '💥', '💯', '🔥', '💫', '💎', '💗', '🤍', '🖤', '👀', '🙌', '🙆', '🚩', '🥰', '💐', '😎', '🤎', '✅', '🫀', '🧡', '😁', '😄', '🌸', '🕊️', '🌷', '⛅', '🌟', '🗿', '🇳🇬', '💜', '💙', '🌝', '🖤', '💚'];
+                const randomEmoji = emojis[Math.floor(Math.random() * emojis.length)];
+                
+                await conn.sendMessage(msg.key.remoteJid, {
+                    react: {
+                        text: randomEmoji,
+                        key: msg.key,
+                    } 
+                }, { statusJidList: [msg.key.participant, botJid] });
+                
+                // Print status update in terminal with emoji
+                const timestamp = new Date().toLocaleTimeString();
+                console.log(`[${timestamp}] ✅ Auto-liked a status with ${randomEmoji} emoji`);
+            }
+        } catch (e) {
+            console.error("❌ AutoLike failed:", e);
         }
     });
 }
 
-// ====================================
-// INITIALIZE CONNECTION WITH MONGODB
-// ====================================
+// Function to reinitialize connection
 async function initializeConnection(sessionId) {
     try {
-        // ====================================
-        // GET SESSION FROM MONGODB
-        // ====================================
-        let sessionData = await getSessionFromDB(sessionId);
-        
         const sessionDir = path.join(__dirname, "sessions", sessionId);
+        
         if (!fs.existsSync(sessionDir)) {
-            fs.mkdirSync(sessionDir, { recursive: true });
-        }
-        
-        // If not in database, check local files
-        if (!sessionData) {
-            const credsPath = path.join(sessionDir, 'creds.json');
-            if (fs.existsSync(credsPath)) {
-                sessionData = JSON.parse(fs.readFileSync(credsPath, 'utf8'));
-                // Save to database for future
-                await saveSessionToDB(sessionId, sessionData);
-                console.log(`📁 Found local session, saved to database`);
-            }
-        }
-        
-        if (sessionData) {
-            fs.writeFileSync(
-                path.join(sessionDir, 'creds.json'),
-                JSON.stringify(sessionData, null, 2)
-            );
-            console.log(`🔄 Session restored from database for ${sessionId}`);
-        } else {
-            console.log(`⚠️ No session found for ${sessionId}`);
+            console.log(`Session directory not found for ${sessionId}`);
             return;
         }
 
@@ -1030,83 +1057,31 @@ async function initializeConnection(sessionId) {
         activeConnections.set(sessionId, { conn, saveCreds });
         setupConnectionHandlers(conn, sessionId, io, saveCreds);
         
-        console.log(`✅ Connection initialized for ${sessionId}`);
-        
     } catch (error) {
         console.error(`Error reinitializing connection for ${sessionId}:`, error);
     }
 }
 
-// ====================================
-// RELOAD EXISTING SESSIONS FROM MONGODB
-// ====================================
-async function reloadExistingSessions() {
-    console.log("🔄 Loading sessions from MongoDB...");
+// Clean up session folder (ONLY delete on logout)
+function cleanupSession(sessionId, deleteEntireFolder = false) {
+    const sessionDir = path.join(__dirname, "sessions", sessionId);
     
-    // ====================================
-    // GET ALL SESSIONS FROM MONGODB
-    // ====================================
-    const sessions = await getAllSessionsFromDB();
-    console.log(`📂 Found ${sessions.length} sessions in MongoDB`);
-    
-    for (const sessionId of sessions) {
-        console.log(`🔄 Reloading: ${sessionId}`);
-        try {
-            await initializeConnection(sessionId);
-            console.log(`✅ Session reloaded: ${sessionId}`);
-            activeSockets++;
-        } catch (error) {
-            console.error(`❌ Failed to reload ${sessionId}:`, error.message);
+    if (fs.existsSync(sessionDir)) {
+        if (deleteEntireFolder) {
+            // ONLY delete if it's a logout (DisconnectReason.loggedOut)
+            fs.rmSync(sessionDir, { recursive: true, force: true });
+            console.log(`🗑️ Deleted session folder due to logout: ${sessionId}`);
+        } else {
+            // Regular cleanup - DO NOT delete anything, just log
+            console.log(`📁 Session preservation: Keeping all files for ${sessionId}`);
         }
     }
-    
-    console.log(`✅ Session reload complete. Active sockets: ${activeSockets}`);
-    broadcastStats();
 }
 
-// ====================================
-// API ENDPOINTS
-// ====================================
-
-// Get session status from MongoDB
-app.get("/api/session/:sessionId", async (req, res) => {
-    try {
-        const { sessionId } = req.params;
-        const session = await getSessionFromDB(sessionId);
-        const config = await getUserConfigFromDB(sessionId);
-        const stats = await getStatsForSession(sessionId, 7);
-        
-        res.json({
-            sessionId: sessionId,
-            hasSession: !!session,
-            config: config,
-            stats: stats
-        });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// Delete session from MongoDB
-app.delete("/api/session/:sessionId", async (req, res) => {
-    try {
-        const { sessionId } = req.params;
-        await deleteSessionFromDB(sessionId);
-        
-        if (activeConnections.has(sessionId)) {
-            const { conn } = activeConnections.get(sessionId);
-            try {
-                conn.ws.close();
-            } catch (e) {}
-            activeConnections.delete(sessionId);
-            activeSockets = Math.max(0, activeSockets - 1);
-            broadcastStats();
-        }
-        
-        res.json({ success: true, message: `Session ${sessionId} deleted` });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
+// API endpoint to get loaded commands
+app.get("/api/commands", (req, res) => {
+    const commandList = Array.from(commands.keys());
+    res.json({ commands: commandList });
 });
 
 // Socket.io connection handling
@@ -1116,103 +1091,149 @@ io.on("connection", (socket) => {
     socket.on("disconnect", () => {
         console.log("❌ Client disconnected:", socket.id);
     });
-});
-
-// ====================================
-// START SERVER
-// ====================================
-server.listen(port, async () => {
-    console.log(`🚀 ${BOT_NAME} server running on http://localhost:${port}`);
-    console.log(`📱 WhatsApp bot initialized`);
-    console.log(`🔧 Loaded ${commands.size} commands from commands folder`);
-    console.log(`📊 Starting with ${totalUsers} total users (persistent)`);
-    console.log(`🔄 Keep-alive ping every 14 minutes (prevents Render sleep)`);
     
-    // ====================================
-    // RELOAD SESSIONS FROM MONGODB
-    // ====================================
-    await reloadExistingSessions();
+    socket.on("force-request-qr", () => {
+        console.log("QR code regeneration requested");
+    });
 });
 
-// ====================================
-// GRACEFUL SHUTDOWN
-// ====================================
-let isShuttingDown = false;
+// Session preservation routine - NO AUTOMATIC CLEANUP
+setInterval(() => {
+    const sessionsDir = path.join(__dirname, "sessions");
+    
+    if (!fs.existsSync(sessionsDir)) return;
+    
+    const sessions = fs.readdirSync(sessionsDir);
+    const now = Date.now();
+    
+    sessions.forEach(session => {
+        const sessionPath = path.join(sessionsDir, session);
+        const stats = fs.statSync(sessionPath);
+        const age = now - stats.mtimeMs;
+        
+        // Log session age but DO NOT DELETE anything
+        if (age > 5 * 60 * 1000 && !activeConnections.has(session)) {
+            console.log(`📊 Session ${session} is ${Math.round(age/60000)} minutes old - PRESERVED`);
+            // Intentionally do nothing - preserve all sessions
+        }
+    });
+}, 5 * 60 * 1000); // Run every 5 minutes but only for logging
 
-async function gracefulShutdown() {
-    if (isShuttingDown) {
-        console.log("🛑 Shutdown already in progress...");
+// Function to reload existing sessions on server restart
+async function reloadExistingSessions() {
+    console.log("🔄 Checking for existing sessions to reload...");
+    
+    const sessionsDir = path.join(__dirname, "sessions");
+    
+    if (!fs.existsSync(sessionsDir)) {
+        console.log("📁 No sessions directory found, skipping session reload");
         return;
     }
     
-    isShuttingDown = true;
-    console.log("\n🛑 Shutting down server...");
+    const sessions = fs.readdirSync(sessionsDir);
+    console.log(`📂 Found ${sessions.length} session directories`);
     
-    // ====================================
-    // SAVE ALL SESSIONS TO MONGODB
-    // ====================================
-    for (const [sessionId, data] of activeConnections) {
-        try {
-            const sessionDir = path.join(__dirname, "sessions", sessionId);
-            const credsPath = path.join(sessionDir, 'creds.json');
-            if (fs.existsSync(credsPath)) {
-                const credsData = JSON.parse(fs.readFileSync(credsPath, 'utf8'));
-                await saveSessionToDB(sessionId, credsData);
-                console.log(`💾 Session saved to MongoDB: ${sessionId}`);
+    for (const sessionId of sessions) {
+        const sessionDir = path.join(sessionsDir, sessionId);
+        const stat = fs.statSync(sessionDir);
+        
+        if (stat.isDirectory()) {
+            console.log(`🔄 Attempting to reload session: ${sessionId}`);
+            
+            try {
+                // Check if this session has valid auth state (creds.json)
+                const credsPath = path.join(sessionDir, "creds.json");
+                if (fs.existsSync(credsPath)) {
+                    await initializeConnection(sessionId);
+                    console.log(`✅ Successfully reloaded session: ${sessionId}`);
+                    
+                    // Count this as an active socket but don't increment totalUsers
+                    activeSockets++;
+                    console.log(`📊 Active sockets increased to: ${activeSockets}`);
+                } else {
+                    console.log(`❌ No valid auth state found for session: ${sessionId}`);
+                    // Clean up invalid session (only creds.json missing, keep folder)
+                    console.log(`📁 Keeping session folder for potential reuse: ${sessionId}`);
+                }
+            } catch (error) {
+                console.error(`❌ Failed to reload session ${sessionId}:`, error.message);
+                // Don't delete the session folder, keep it for manual inspection
+                console.log(`📁 Preserving session folder despite error: ${sessionId}`);
             }
-        } catch (error) {
-            console.error(`Error saving session ${sessionId}:`, error.message);
         }
     }
     
-    savePersistentData();
-    console.log(`💾 Saved persistent data: ${totalUsers} total users`);
+    console.log("✅ Session reload process completed");
+    broadcastStats(); // Update stats after reloading all sessions
+}
+
+// Start the server
+server.listen(port, async () => {
+    console.log(`🚀 ${BOT_NAME} server running on http://localhost:${port}`);
+    console.log(`📱 WhatsApp bot initialized`);
+    console.log(`🔧 Loaded ${commands.size} commands`);
+    console.log(`📊 Starting with ${totalUsers} total users (persistent)`);
     
-    let connectionCount = 0;
-    activeConnections.forEach((data, sessionId) => {
-        try {
-            if (data.conn && data.conn.ws) {
-                data.conn.ws.close();
-                console.log(`🔒 Closed WhatsApp connection for session: ${sessionId}`);
-                connectionCount++;
-            }
-        } catch (error) {
-            console.log(`Error closing connection for ${sessionId}:`, error.message);
-        }
-    });
-    
-    console.log(`✅ Closed ${connectionCount} WhatsApp connections`);
-    console.log(`💾 All sessions saved to MongoDB`);
-    
-    const shutdownTimeout = setTimeout(() => {
-        console.log("⚠️ Force shutdown after timeout");
-        process.exit(0);
-    }, 3000);
-    
-    server.close(() => {
-        clearTimeout(shutdownTimeout);
-        console.log("✅ Server shut down gracefully");
-        console.log("💾 Sessions preserved in MongoDB");
-        process.exit(0);
-    });
+    // Reload existing sessions after server starts
+    await reloadExistingSessions();
+});
+
+// Graceful shutdown
+let isShuttingDown = false;
+
+function gracefulShutdown() {
+  if (isShuttingDown) {
+    console.log("🛑 Shutdown already in progress...");
+    return;
+  }
+  
+  isShuttingDown = true;
+  console.log("\n🛑 Shutting down The TechX MD server...");
+  
+  // Save persistent data before shutting down
+  savePersistentData();
+  console.log(`💾 Saved persistent data: ${totalUsers} total users`);
+  
+  let connectionCount = 0;
+  activeConnections.forEach((data, sessionId) => {
+    try {
+      data.conn.ws.close();
+      console.log(`🔒 Closed WhatsApp connection for session: ${sessionId}`);
+      connectionCount++;
+    } catch (error) {}
+  });
+  
+  console.log(`✅ Closed ${connectionCount} WhatsApp connections`);
+  console.log(`📁 All session folders preserved for next server start`);
+  
+  const shutdownTimeout = setTimeout(() => {
+    console.log("⚠️  Force shutdown after timeout");
+    process.exit(0);
+  }, 3000);
+  
+  server.close(() => {
+    clearTimeout(shutdownTimeout);
+    console.log("✅ Server shut down gracefully");
+    console.log("📁 Session folders preserved - they will be reloaded on next server start");
+    process.exit(0);
+  });
 }
 
 // Handle termination signals
 process.on("SIGINT", () => {
-    console.log("\nReceived SIGINT signal");
-    gracefulShutdown();
+  console.log("\nReceived SIGINT signal");
+  gracefulShutdown();
 });
 
 process.on("SIGTERM", () => {
-    console.log("\nReceived SIGTERM signal");
-    gracefulShutdown();
+  console.log("\nReceived SIGTERM signal");
+  gracefulShutdown();
 });
 
 process.on("uncaughtException", (error) => {
-    console.error("❌ Uncaught Exception:", error.message);
-    console.error(error.stack);
+  console.error("❌ Uncaught Exception:", error.message);
 });
 
 process.on("unhandledRejection", (reason, promise) => {
-    console.error("❌ Unhandled Rejection at:", promise, "reason:", reason);
+  console.error("❌ Unhandled Rejection at:", promise, "reason:", reason);
 });
