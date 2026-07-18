@@ -1,15 +1,17 @@
 /**
- * Demote Command - Remove admin privileges
+ * ResetWarn Command - Reset warnings for a user
  */
 
+const { getWarningsFromDB, clearWarningsFromDB } = require('./lib/database');
+
 module.exports = {
-    pattern: "demote",
-    alias: ["removeadmin"],
-    desc: "Remove admin privileges from member",
+    pattern: "resetwarn",
+    alias: ["resetwarning", "clearwarn", "unwarn", "delwarn"],
+    desc: "Reset all warnings for a user",
     category: "admin",
-    react: "⬇️",
+    react: "🔄",
     filename: __filename,
-    use: ".demote @user",
+    use: ".resetwarn @user",
     
     execute: async (conn, message, m, { from, isGroup, reply }) => {
         try {
@@ -28,24 +30,19 @@ module.exports = {
             } else if (ctx?.participant && ctx.stanzaId && ctx.quotedMessage) {
                 target = ctx.participant;
             } else {
-                return reply('❌ Please mention or reply to the user to demote!\n\nExample: .demote @user');
+                return reply('❌ Please mention or reply to the user to reset warnings!\n\nExample: .resetwarn @user');
             }
 
-            const freshMetadata = await conn.groupMetadata(from);
-            const foundParticipant = freshMetadata.participants.find(p => p.id === target);
+            const currentWarnings = await getWarningsFromDB(from, target);
 
-            if (!foundParticipant) {
-                return reply('❌ User not found in group!');
+            if (currentWarnings.warningCount === 0) {
+                return reply(`✅ @${target.split('@')[0]} has no warnings to reset.`);
             }
 
-            if (foundParticipant.admin !== 'admin' && foundParticipant.admin !== 'superadmin') {
-                return reply('❌ This user is not an admin!');
-            }
-
-            await conn.groupParticipantsUpdate(from, [target], 'demote');
+            await clearWarningsFromDB(from, target);
 
             await conn.sendMessage(from, {
-                text: `✅ @${target.split('@')[0]} is no longer an admin!`,
+                text: `✅ *Warnings Reset*\n\n👤 User: @${target.split('@')[0]}\n⚠️ Previous warnings: ${currentWarnings.warningCount}\n\nAll warnings have been cleared.`,
                 mentions: [target]
             }, { quoted: message });
 
@@ -53,7 +50,7 @@ module.exports = {
                 await conn.sendMessage(from, { react: { text: module.exports.react, key: message.key } });
             }
         } catch (error) {
-            console.error('[demote] error:', error);
+            console.error('[resetwarn] error:', error);
             await reply(`❌ Error: ${error.message}`);
         }
     }

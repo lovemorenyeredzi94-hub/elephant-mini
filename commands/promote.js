@@ -1,75 +1,60 @@
-// === promote.js ===
+/**
+ * Promote Command - Make member admin
+ */
+
 module.exports = {
-  pattern: "promote",
-  desc: "Promote a user to admin (Admin/Owner Only)",
-  category: "group",
-  react: "⚡",
-  filename: __filename,
-  use: ".promote @user OR reply to a user",
+    pattern: "promote",
+    alias: ["makeadmin"],
+    desc: "Promote member to admin",
+    category: "admin",
+    react: "⬆️",
+    filename: __filename,
+    use: ".promote @user",
+    
+    execute: async (conn, message, m, { from, isGroup, reply }) => {
+        try {
+            if (!isGroup) return reply("❌ This command can only be used in groups.");
 
-  execute: async (conn, message, m, { from, isGroup, reply, sender }) => {
-    try {
-      if (!isGroup) return reply("❌ This command can only be used in groups.");
+            if (!m.isAdmin && !m.isOwner) {
+                return reply("❌ Only admins can use this command.");
+            }
 
-      let metadata;
-      try {
-        metadata = await conn.groupMetadata(from);
-      } catch {
-        return reply("❌ Failed to get group info.");
-      }
+            let target;
+            const ctx = message.message?.extendedTextMessage?.contextInfo;
+            const mentioned = ctx?.mentionedJid || [];
 
-      const participant = metadata.participants.find(p => p.id === sender);
-      const isAdmin = participant?.admin === "admin" || participant?.admin === "superadmin";
-      const isOwner = conn.user.id.split(":")[0] === sender.split("@")[0];
-      if (!isAdmin && !isOwner) return reply("❌ Only admins can use this command.");
+            if (mentioned && mentioned.length > 0) {
+                target = mentioned[0];
+            } else if (ctx?.participant && ctx.stanzaId && ctx.quotedMessage) {
+                target = ctx.participant;
+            } else {
+                return reply('❌ Please mention or reply to the user to promote!\n\nExample: .promote @user');
+            }
 
-      let target = null;
-      if (m.mentionedJid && m.mentionedJid.length > 0) {
-        target = m.mentionedJid[0];
-      } else if (m.quoted) {
-        target = m.quoted.sender;
-      }
+            const freshMetadata = await conn.groupMetadata(from);
+            const foundParticipant = freshMetadata.participants.find(p => p.id === target);
 
-      if (!target) return reply("❌ Mention or reply to a user to promote.");
+            if (!foundParticipant) {
+                return reply('❌ User not found in group!');
+            }
 
-      // React success
-      await conn.sendMessage(from, { react: { text: "✅", key: message.key } });
+            if (foundParticipant.admin === 'admin' || foundParticipant.admin === 'superadmin') {
+                return reply('❌ This user is already an admin!');
+            }
 
-      // Promote + contextInfo
-      await conn.groupParticipantsUpdate(from, [target], "promote");
-      await conn.sendMessage(from, {
-        text: `⚡ Promoted @${target.split("@")[0]} to admin`,
-        mentions: [target],
-        contextInfo: {
-          forwardingScore: 999,
-          isForwarded: true,
-          forwardedNewsletterMessageInfo: {
-            newsletterJid: "120363418906972955@newsletter",
-            newsletterName: "𝐐α͜͡𝐝εεɼ𝐗𝐓ε𝐜𝐡",
-            serverMessageId: 200
-          }
+            await conn.groupParticipantsUpdate(from, [target], 'promote');
+
+            await conn.sendMessage(from, {
+                text: `✅ @${target.split('@')[0]} is now an admin!`,
+                mentions: [target]
+            }, { quoted: message });
+
+            if (module.exports.react) {
+                await conn.sendMessage(from, { react: { text: module.exports.react, key: message.key } });
+            }
+        } catch (error) {
+            console.error('[promote] error:', error);
+            await reply(`❌ Error: ${error.message}`);
         }
-      }, { quoted: message });
-
-    } catch (e) {
-      console.error("Promote error:", e);
-
-      // React fail
-      await conn.sendMessage(from, { react: { text: "❌", key: message.key } });
-
-      // Error with contextInfo
-      await conn.sendMessage(from, {
-        text: "⚠️ Failed to promote user.",
-        contextInfo: {
-          forwardingScore: 999,
-          isForwarded: true,
-          forwardedNewsletterMessageInfo: {
-            newsletterJid: "120363418906972955@newsletter",
-            newsletterName: "𝐐α͜͡𝐝εεɼ𝐗𝐓ε𝐜𝐡",
-            serverMessageId: 200
-          }
-        }
-      }, { quoted: message });
     }
-  }
 };

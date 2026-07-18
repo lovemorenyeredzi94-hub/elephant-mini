@@ -1,53 +1,107 @@
-// === hidetag.js ===
+/**
+ * HideTag Command - Silently tag all group members
+ */
+
+const { downloadMediaMessage } = require('@whiskeysockets/baileys');
+
 module.exports = {
-  pattern: "hidetag",
-  desc: "Tag all members for any message/media - everyone can use",
-  category: "group",
-  use: ".hidetag [message] or reply to a message",
-  filename: __filename,
+    pattern: "hidetag",
+    alias: ["tag"],
+    desc: "Silently tag all members in the group",
+    category: "admin",
+    react: "👥",
+    filename: __filename,
+    use: ".tag <message> (or reply to media)",
+    
+    execute: async (conn, message, m, { from, isGroup, reply }) => {
+        try {
+            if (!isGroup) return reply("❌ This command can only be used in groups.");
 
-  execute: async (conn, message, m, { q, reply, from, isGroup }) => {
-    try {
-      if (!isGroup) return reply("❌ This command can only be used in groups.");
+            if (!m.isAdmin && !m.isOwner) {
+                return reply("❌ Only admins can use this command.");
+            }
 
-      // --- fetch group metadata ---
-      let metadata;
-      try {
-        metadata = await conn.groupMetadata(from);
-      } catch {
-        return reply("❌ Failed to get group information.");
-      }
+            const groupMetadata = await conn.groupMetadata(from);
+            const participants = groupMetadata.participants || [];
+            const mentions = participants.map((p) => p.id || p.lid).filter(Boolean);
 
-      // --- mentions list ---
-      const participants = metadata.participants.map(p => p.id);
+            const ctxInfo = message.message?.extendedTextMessage?.contextInfo;
+            let targetMessage = message;
 
-      if (!q && !m.quoted) return reply("❌ Provide a message or reply to a message.");
+            if (ctxInfo?.quotedMessage) {
+                targetMessage = {
+                    key: {
+                        remoteJid: from,
+                        id: ctxInfo.stanzaId,
+                        participant: ctxInfo.participant,
+                    },
+                    message: ctxInfo.quotedMessage,
+                };
+            }
 
-      // React 👀
-      await conn.sendMessage(from, { react: { text: "👀", key: message.key } });
+            const mediaMessage = 
+                targetMessage.message?.imageMessage ||
+                targetMessage.message?.videoMessage ||
+                targetMessage.message?.stickerMessage;
 
-      // --- reply case ---
-      if (m.quoted) {
-        return await conn.sendMessage(
-          from,
-          { forward: m.quoted.message, mentions: participants },
-          { quoted: message }
-        );
-      }
+            const args = m.args || [];
 
-      // --- text case ---
-      if (q) {
-        return await conn.sendMessage(
-          from,
-          { text: q, mentions: participants },
-          { quoted: message }
-        );
-      }
+            if (mediaMessage) {
+                try {
+                    const mediaBuffer = await downloadMediaMessage(
+                        targetMessage,
+                        'buffer',
+                        {},
+                        { logger: undefined, reuploadRequest: conn.updateMediaMessage }
+                    );
 
-    } catch (e) {
-      console.error("Hidetag error:", e);
-      try { await conn.sendMessage(from, { react: { text: "❌", key: message.key } }); } catch {}
-      reply(`⚠️ Failed to send hidetag.\n\n${e.message}`);
+                    if (targetMessage.message?.imageMessage) {
+                        const text = args.join(' ') || targetMessage.message.imageMessage.caption || '';
+                        await conn.sendMessage(from, {
+                            image: mediaBuffer,
+                            caption: text,
+                            mentions
+                        }, { quoted: message });
+                    } else if (targetMessage.message?.videoMessage) {
+                        const text = args.join(' ') || targetMessage.message.videoMessage.caption || '';
+                        await conn.sendMessage(from, {
+                            video: mediaBuffer,
+                            caption: text,
+                            mentions
+                        }, { quoted: message });
+                    } else if (targetMessage.message?.stickerMessage) {
+                        await conn.sendMessage(from, {
+                            sticker: mediaBuffer,
+                            mentions
+                        }, { quoted: message });
+                        const text = args.join(' ');
+                        if (text) {
+                            await conn.sendMessage(from, { text, mentions }, { quoted: message });
+                        }
+                    }
+                } catch (mediaError) {
+                    console.error('Error downloading media for hidetag:', mediaError);
+                    const text = args.join(' ') || ' ';
+                    await conn.sendMessage(from, { text, mentions }, { quoted: message });
+                }
+            } else {
+                if (ctxInfo?.quotedMessage) {
+                    const quotedText = ctxInfo.quotedMessage.conversation || 
+                                     ctxInfo.quotedMessage.extendedTextMessage?.text || 
+                                     args.join(' ') || ' ';
+                    await conn.sendMessage(from, { text: quotedText, mentions }, { quoted: message });
+                } else {
+                    const text = args.join(' ') || ' ';
+                    await conn.sendMessage(from, { text, mentions }, { quoted: message });
+                }
+            }
+
+            if (module.exports.react) {
+                await conn.sendMessage(from, { react: { text: module.exports.react, key: message.key } });
+            }
+        } catch (error) {
+            console.error('[hidetag] error:', error);
+            await reply('❌ Failed to tag members.');
+        }
     }
-  }
 };
