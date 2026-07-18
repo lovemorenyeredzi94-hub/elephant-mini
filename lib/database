@@ -1,5 +1,9 @@
 const Sequelize = require('sequelize');
+require('dotenv').config();
 
+// ====================================
+// DATABASE MANAGER
+// ====================================
 class DatabaseManager {
     static instance = null;
 
@@ -10,7 +14,7 @@ class DatabaseManager {
             DatabaseManager.instance =
                 DATABASE_URL === './database.db'
                     ? new Sequelize({
-                            dialect: 'sq',
+                            dialect: 'sqlite',
                             storage: DATABASE_URL,
                             logging: false,
                       })
@@ -31,14 +35,981 @@ class DatabaseManager {
 
 const DATABASE = DatabaseManager.getInstance();
 
-DATABASE.sync()
+// ====================================
+// MODELS
+// ====================================
+
+// 1. Session Model (WhatsApp Auth)
+const Session = DATABASE.define('Session', {
+    sessionId: {
+        type: Sequelize.STRING,
+        allowNull: false,
+        unique: true,
+        primaryKey: true
+    },
+    credentials: {
+        type: Sequelize.TEXT,
+        allowNull: false,
+        get() {
+            const raw = this.getDataValue('credentials');
+            return raw ? JSON.parse(raw) : null;
+        },
+        set(value) {
+            this.setDataValue('credentials', JSON.stringify(value));
+        }
+    },
+    createdAt: {
+        type: Sequelize.DATE,
+        defaultValue: Sequelize.NOW
+    },
+    updatedAt: {
+        type: Sequelize.DATE,
+        defaultValue: Sequelize.NOW
+    }
+});
+
+// 2. User Config Model
+const UserConfig = DATABASE.define('UserConfig', {
+    sessionId: {
+        type: Sequelize.STRING,
+        allowNull: false,
+        unique: true,
+        primaryKey: true
+    },
+    prefix: {
+        type: Sequelize.STRING,
+        defaultValue: '.'
+    },
+    config: {
+        type: Sequelize.TEXT,
+        allowNull: false,
+        defaultValue: JSON.stringify({
+            AUTO_RECORDING: 'false',
+            AUTO_TYPING: 'false',
+            ANTI_CALL: 'false',
+            READ_MESSAGE: 'false',
+            AUTO_VIEW_STATUS: 'true',
+            AUTO_LIKE_STATUS: 'true',
+            AUTO_STATUS_REPLY: 'false',
+            AUTO_STATUS_MSG: 'Your status has been seen!',
+            AUTO_LIKE_EMOJI: ['❤️', '🔥', '💫', '🌟']
+        }),
+        get() {
+            const raw = this.getDataValue('config');
+            return raw ? JSON.parse(raw) : {};
+        },
+        set(value) {
+            this.setDataValue('config', JSON.stringify(value));
+        }
+    },
+    createdAt: {
+        type: Sequelize.DATE,
+        defaultValue: Sequelize.NOW
+    },
+    updatedAt: {
+        type: Sequelize.DATE,
+        defaultValue: Sequelize.NOW
+    }
+});
+
+// 3. Stats Model
+const Stats = DATABASE.define('Stats', {
+    id: {
+        type: Sequelize.INTEGER,
+        autoIncrement: true,
+        primaryKey: true
+    },
+    sessionId: {
+        type: Sequelize.STRING,
+        allowNull: false
+    },
+    date: {
+        type: Sequelize.STRING,
+        allowNull: false
+    },
+    commandsUsed: {
+        type: Sequelize.INTEGER,
+        defaultValue: 0
+    },
+    messagesReceived: {
+        type: Sequelize.INTEGER,
+        defaultValue: 0
+    },
+    messagesSent: {
+        type: Sequelize.INTEGER,
+        defaultValue: 0
+    },
+    groupsInteracted: {
+        type: Sequelize.INTEGER,
+        defaultValue: 0
+    }
+});
+
+// 4. Pairing Code Model
+const PairingCode = DATABASE.define('PairingCode', {
+    id: {
+        type: Sequelize.INTEGER,
+        autoIncrement: true,
+        primaryKey: true
+    },
+    sessionId: {
+        type: Sequelize.STRING,
+        allowNull: false
+    },
+    number: {
+        type: Sequelize.STRING,
+        allowNull: false
+    },
+    code: {
+        type: Sequelize.STRING,
+        allowNull: false
+    },
+    expiresAt: {
+        type: Sequelize.DATE,
+        allowNull: false,
+        defaultValue: () => new Date(Date.now() + 10 * 60000)
+    },
+    createdAt: {
+        type: Sequelize.DATE,
+        defaultValue: Sequelize.NOW
+    }
+});
+
+// 5. Active Number Model
+const ActiveNumber = DATABASE.define('ActiveNumber', {
+    sessionId: {
+        type: Sequelize.STRING,
+        allowNull: false,
+        unique: true,
+        primaryKey: true
+    },
+    number: {
+        type: Sequelize.STRING,
+        allowNull: false
+    },
+    lastConnected: {
+        type: Sequelize.DATE,
+        defaultValue: Sequelize.NOW
+    },
+    isActive: {
+        type: Sequelize.BOOLEAN,
+        defaultValue: true
+    }
+});
+
+// 6. Group Settings Model (for anti-features)
+const GroupSettings = DATABASE.define('GroupSettings', {
+    groupId: {
+        type: Sequelize.STRING,
+        allowNull: false,
+        unique: true,
+        primaryKey: true
+    },
+    settings: {
+        type: Sequelize.TEXT,
+        allowNull: false,
+        defaultValue: JSON.stringify({
+            // Anti-Link
+            antiLink: false,
+            antiLinkAction: 'delete',
+            allowedDomains: ['youtube.com', 'youtu.be', 'instagram.com'],
+            
+            // Anti-Spam
+            antiSpam: false,
+            spamThreshold: 5,
+            spamAction: 'delete',
+            
+            // Anti-Badword
+            antiBadword: false,
+            badwordAction: 'delete',
+            customBadwords: [],
+            
+            // Anti-Voice
+            antiVoice: false,
+            antiVoiceAction: 'delete',
+            
+            // Anti-Sticker
+            antiSticker: false,
+            antiStickerAction: 'delete',
+            
+            // Anti-Privacy
+            antiPrivacy: false,
+            
+            // Anti-Delete
+            antiDelete: false,
+            
+            // Anti-Group Status
+            antigroupstatus: false,
+            antigroupstatusAction: 'delete',
+            
+            // Anti-Group Mention
+            antigroupmention: false,
+            antigroupmentionAction: 'delete',
+            
+            // Anti-Tag
+            antitag: false,
+            antitagAction: 'delete',
+            
+            // Anti-All
+            antiall: false,
+            
+            // Welcome/Goodbye
+            welcome: true,
+            welcomeMessage: '👋 Welcome @user to the group!',
+            goodbye: true,
+            goodbyeMessage: '👋 @user has left the group!',
+            
+            // Leveling
+            leveling: false,
+            levelUpMessage: true,
+            
+            // Auto-Delete
+            autoDelete: false,
+            autoDeleteTime: 60,
+            
+            // NSFW
+            nsfw: false,
+            
+            // Mute
+            muted: false,
+            mutedUntil: null,
+            
+            // Language
+            language: 'en',
+            
+            // Prefix
+            prefix: '.',
+            
+            // Chatbot
+            chatbot: false,
+            
+            // AutoSticker
+            autosticker: false,
+            
+            // Max Warnings
+            maxWarnings: 3
+        }),
+        get() {
+            const raw = this.getDataValue('settings');
+            return raw ? JSON.parse(raw) : {};
+        },
+        set(value) {
+            this.setDataValue('settings', JSON.stringify(value));
+        }
+    },
+    createdAt: {
+        type: Sequelize.DATE,
+        defaultValue: Sequelize.NOW
+    },
+    updatedAt: {
+        type: Sequelize.DATE,
+        defaultValue: Sequelize.NOW
+    }
+});
+
+// 7. Warnings Model
+const Warning = DATABASE.define('Warning', {
+    id: {
+        type: Sequelize.INTEGER,
+        autoIncrement: true,
+        primaryKey: true
+    },
+    groupId: {
+        type: Sequelize.STRING,
+        allowNull: false
+    },
+    userId: {
+        type: Sequelize.STRING,
+        allowNull: false
+    },
+    warnings: {
+        type: Sequelize.TEXT,
+        allowNull: false,
+        defaultValue: '[]',
+        get() {
+            const raw = this.getDataValue('warnings');
+            return raw ? JSON.parse(raw) : [];
+        },
+        set(value) {
+            this.setDataValue('warnings', JSON.stringify(value));
+        }
+    },
+    warningCount: {
+        type: Sequelize.INTEGER,
+        defaultValue: 0
+    },
+    createdAt: {
+        type: Sequelize.DATE,
+        defaultValue: Sequelize.NOW
+    },
+    updatedAt: {
+        type: Sequelize.DATE,
+        defaultValue: Sequelize.NOW
+    }
+});
+
+// 8. Muted Users Model
+const MutedUser = DATABASE.define('MutedUser', {
+    id: {
+        type: Sequelize.INTEGER,
+        autoIncrement: true,
+        primaryKey: true
+    },
+    groupId: {
+        type: Sequelize.STRING,
+        allowNull: false
+    },
+    userId: {
+        type: Sequelize.STRING,
+        allowNull: false
+    },
+    until: {
+        type: Sequelize.DATE,
+        allowNull: false
+    },
+    reason: {
+        type: Sequelize.STRING,
+        defaultValue: 'No reason provided'
+    },
+    mutedBy: {
+        type: Sequelize.STRING,
+        allowNull: true
+    },
+    createdAt: {
+        type: Sequelize.DATE,
+        defaultValue: Sequelize.NOW
+    }
+});
+
+// 9. Spam Tracker Model
+const SpamTracker = DATABASE.define('SpamTracker', {
+    id: {
+        type: Sequelize.INTEGER,
+        autoIncrement: true,
+        primaryKey: true
+    },
+    groupId: {
+        type: Sequelize.STRING,
+        allowNull: false
+    },
+    userId: {
+        type: Sequelize.STRING,
+        allowNull: false
+    },
+    messageCount: {
+        type: Sequelize.INTEGER,
+        defaultValue: 0
+    },
+    firstMessageTime: {
+        type: Sequelize.DATE,
+        defaultValue: Sequelize.NOW
+    },
+    lastMessageTime: {
+        type: Sequelize.DATE,
+        defaultValue: Sequelize.NOW
+    },
+    resetTime: {
+        type: Sequelize.DATE,
+        defaultValue: () => new Date(Date.now() + 60000)
+    }
+});
+
+// ====================================
+// SYNC DATABASE
+// ====================================
+DATABASE.sync({ alter: true })
     .then(() => {
-        console.log('Database synchronized successfully.');
+        console.log('✅ Database synchronized successfully.');
     })
     .catch((error) => {
-        console.error('Error synchronizing the database:', error);
+        console.error('❌ Error synchronizing the database:', error);
     });
 
-module.exports = { DATABASE };
+// ====================================
+// SESSION FUNCTIONS
+// ====================================
 
-// Urx Qadeer
+async function saveSessionToDB(sessionId, credentials) {
+    try {
+        await Session.upsert({
+            sessionId: sessionId,
+            credentials: credentials,
+            updatedAt: new Date()
+        });
+        console.log(`📁 Session saved to DB for ${sessionId}`);
+        return true;
+    } catch (error) {
+        console.error('❌ Error saving session:', error);
+        return false;
+    }
+}
+
+async function getSessionFromDB(sessionId) {
+    try {
+        const session = await Session.findByPk(sessionId);
+        return session ? session.credentials : null;
+    } catch (error) {
+        console.error('❌ Error getting session:', error);
+        return null;
+    }
+}
+
+async function deleteSessionFromDB(sessionId) {
+    try {
+        await Session.destroy({ where: { sessionId: sessionId } });
+        await UserConfig.destroy({ where: { sessionId: sessionId } });
+        await ActiveNumber.destroy({ where: { sessionId: sessionId } });
+        console.log(`🗑️ Session deleted from DB for ${sessionId}`);
+        return true;
+    } catch (error) {
+        console.error('❌ Error deleting session:', error);
+        return false;
+    }
+}
+
+async function getAllSessionsFromDB() {
+    try {
+        const sessions = await Session.findAll();
+        return sessions.map(s => s.sessionId);
+    } catch (error) {
+        console.error('❌ Error getting sessions:', error);
+        return [];
+    }
+}
+
+// ====================================
+// USER CONFIG FUNCTIONS
+// ====================================
+
+async function getUserConfigFromDB(sessionId) {
+    try {
+        let config = await UserConfig.findByPk(sessionId);
+        
+        if (!config) {
+            config = await UserConfig.create({
+                sessionId: sessionId,
+                prefix: '.',
+                config: {
+                    AUTO_RECORDING: 'false',
+                    AUTO_TYPING: 'false',
+                    ANTI_CALL: 'false',
+                    READ_MESSAGE: 'false',
+                    AUTO_VIEW_STATUS: 'true',
+                    AUTO_LIKE_STATUS: 'true',
+                    AUTO_STATUS_REPLY: 'false',
+                    AUTO_STATUS_MSG: 'Your status has been seen!',
+                    AUTO_LIKE_EMOJI: ['❤️', '🔥', '💫', '🌟']
+                }
+            });
+            console.log(`📝 Created default config for ${sessionId}`);
+        }
+        return config;
+    } catch (error) {
+        console.error('❌ Error getting user config:', error);
+        return null;
+    }
+}
+
+async function updateUserConfigInDB(sessionId, updates) {
+    try {
+        await UserConfig.update(updates, {
+            where: { sessionId: sessionId }
+        });
+        console.log(`⚙️ Config updated for ${sessionId}`);
+        return true;
+    } catch (error) {
+        console.error('❌ Error updating user config:', error);
+        return false;
+    }
+}
+
+// ====================================
+// PAIRING CODE FUNCTIONS
+// ====================================
+
+async function savePairingCodeToDB(sessionId, number, code) {
+    try {
+        await PairingCode.destroy({ 
+            where: { sessionId: sessionId } 
+        });
+        
+        await PairingCode.create({
+            sessionId: sessionId,
+            number: number,
+            code: code,
+            expiresAt: new Date(Date.now() + 10 * 60000)
+        });
+        console.log(`🔐 Pairing code saved for ${sessionId}`);
+        return true;
+    } catch (error) {
+        console.error('❌ Error saving pairing code:', error);
+        return false;
+    }
+}
+
+async function getPairingCodeFromDB(sessionId) {
+    try {
+        const pairing = await PairingCode.findOne({
+            where: {
+                sessionId: sessionId,
+                expiresAt: { [Sequelize.Op.gt]: new Date() }
+            }
+        });
+        return pairing ? pairing.code : null;
+    } catch (error) {
+        console.error('❌ Error getting pairing code:', error);
+        return null;
+    }
+}
+
+// ====================================
+// ACTIVE NUMBER FUNCTIONS
+// ====================================
+
+async function addActiveNumberToDB(sessionId, number) {
+    try {
+        await ActiveNumber.upsert({
+            sessionId: sessionId,
+            number: number,
+            lastConnected: new Date(),
+            isActive: true
+        });
+        console.log(`✅ Active number added: ${number}`);
+        return true;
+    } catch (error) {
+        console.error('❌ Error adding active number:', error);
+        return false;
+    }
+}
+
+async function removeActiveNumberFromDB(sessionId) {
+    try {
+        await ActiveNumber.destroy({ where: { sessionId: sessionId } });
+        console.log(`🗑️ Active number removed: ${sessionId}`);
+        return true;
+    } catch (error) {
+        console.error('❌ Error removing active number:', error);
+        return false;
+    }
+}
+
+async function getAllActiveNumbersFromDB() {
+    try {
+        const active = await ActiveNumber.findAll({ where: { isActive: true } });
+        return active.map(a => a.sessionId);
+    } catch (error) {
+        console.error('❌ Error getting active numbers:', error);
+        return [];
+    }
+}
+
+// ====================================
+// STATS FUNCTIONS
+// ====================================
+
+async function incrementStats(sessionId, field) {
+    try {
+        const today = new Date().toISOString().split('T')[0];
+        
+        const [stats, created] = await Stats.findOrCreate({
+            where: {
+                sessionId: sessionId,
+                date: today
+            },
+            defaults: {
+                sessionId: sessionId,
+                date: today,
+                commandsUsed: 0,
+                messagesReceived: 0,
+                messagesSent: 0,
+                groupsInteracted: 0
+            }
+        });
+        
+        if (!created) {
+            stats[field] = (stats[field] || 0) + 1;
+            await stats.save();
+        } else {
+            stats[field] = 1;
+            await stats.save();
+        }
+        
+        return true;
+    } catch (error) {
+        console.error('❌ Error updating stats:', error);
+        return false;
+    }
+}
+
+async function getStatsForSession(sessionId, days = 7) {
+    try {
+        const dateLimit = new Date();
+        dateLimit.setDate(dateLimit.getDate() - days);
+        const dateStr = dateLimit.toISOString().split('T')[0];
+        
+        const stats = await Stats.findAll({
+            where: {
+                sessionId: sessionId,
+                date: { [Sequelize.Op.gte]: dateStr }
+            },
+            order: [['date', 'DESC']]
+        });
+        
+        return stats;
+    } catch (error) {
+        console.error('❌ Error getting stats:', error);
+        return [];
+    }
+}
+
+// ====================================
+// GROUP SETTINGS FUNCTIONS
+// ====================================
+
+async function getGroupSettingsFromDB(groupId) {
+    try {
+        let settings = await GroupSettings.findByPk(groupId);
+        
+        if (!settings) {
+            settings = await GroupSettings.create({
+                groupId: groupId,
+                settings: {
+                    antiLink: false,
+                    antiLinkAction: 'delete',
+                    allowedDomains: ['youtube.com', 'youtu.be', 'instagram.com'],
+                    antiSpam: false,
+                    spamThreshold: 5,
+                    spamAction: 'delete',
+                    antiBadword: false,
+                    badwordAction: 'delete',
+                    customBadwords: [],
+                    antiVoice: false,
+                    antiVoiceAction: 'delete',
+                    antiSticker: false,
+                    antiStickerAction: 'delete',
+                    antiPrivacy: false,
+                    antiDelete: false,
+                    antigroupstatus: false,
+                    antigroupstatusAction: 'delete',
+                    antigroupmention: false,
+                    antigroupmentionAction: 'delete',
+                    antitag: false,
+                    antitagAction: 'delete',
+                    antiall: false,
+                    welcome: true,
+                    welcomeMessage: '👋 Welcome @user to the group!',
+                    goodbye: true,
+                    goodbyeMessage: '👋 @user has left the group!',
+                    leveling: false,
+                    levelUpMessage: true,
+                    autoDelete: false,
+                    autoDeleteTime: 60,
+                    nsfw: false,
+                    muted: false,
+                    mutedUntil: null,
+                    language: 'en',
+                    prefix: '.',
+                    chatbot: false,
+                    autosticker: false,
+                    maxWarnings: 3
+                }
+            });
+            console.log(`📝 Created default settings for group: ${groupId}`);
+        }
+        return settings;
+    } catch (error) {
+        console.error('❌ Error getting group settings:', error);
+        return null;
+    }
+}
+
+async function updateGroupSettingsInDB(groupId, updates) {
+    try {
+        const settings = await GroupSettings.findByPk(groupId);
+        if (!settings) {
+            return await getGroupSettingsFromDB(groupId);
+        }
+        
+        const currentSettings = settings.settings;
+        const newSettings = { ...currentSettings, ...updates };
+        settings.settings = newSettings;
+        settings.updatedAt = new Date();
+        await settings.save();
+        
+        console.log(`⚙️ Group settings updated for ${groupId}`);
+        return settings;
+    } catch (error) {
+        console.error('❌ Error updating group settings:', error);
+        return null;
+    }
+}
+
+async function toggleGroupSetting(groupId, setting, value) {
+    try {
+        const settings = await getGroupSettingsFromDB(groupId);
+        if (!settings) return null;
+        
+        const currentSettings = settings.settings;
+        currentSettings[setting] = value;
+        settings.settings = currentSettings;
+        settings.updatedAt = new Date();
+        await settings.save();
+        
+        console.log(`⚙️ Toggled ${setting} to ${value} for ${groupId}`);
+        return settings;
+    } catch (error) {
+        console.error(`❌ Error toggling ${setting}:`, error);
+        return null;
+    }
+}
+
+// ====================================
+// WARNING FUNCTIONS
+// ====================================
+
+async function addWarningToDB(groupId, userId, reason, warnedBy = null) {
+    try {
+        let warning = await Warning.findOne({
+            where: { groupId: groupId, userId: userId }
+        });
+        
+        if (!warning) {
+            warning = await Warning.create({
+                groupId: groupId,
+                userId: userId,
+                warnings: [],
+                warningCount: 0
+            });
+        }
+        
+        const currentWarnings = warning.warnings;
+        currentWarnings.push({
+            reason: reason,
+            date: new Date(),
+            warnedBy: warnedBy
+        });
+        
+        warning.warnings = currentWarnings;
+        warning.warningCount = currentWarnings.length;
+        warning.updatedAt = new Date();
+        await warning.save();
+        
+        return warning;
+    } catch (error) {
+        console.error('❌ Error adding warning:', error);
+        return null;
+    }
+}
+
+async function getWarningsFromDB(groupId, userId) {
+    try {
+        const warning = await Warning.findOne({
+            where: { groupId: groupId, userId: userId }
+        });
+        return warning || { warningCount: 0, warnings: [] };
+    } catch (error) {
+        console.error('❌ Error getting warnings:', error);
+        return { warningCount: 0, warnings: [] };
+    }
+}
+
+async function removeWarningFromDB(groupId, userId) {
+    try {
+        const warning = await Warning.findOne({
+            where: { groupId: groupId, userId: userId }
+        });
+        if (!warning || warning.warnings.length === 0) return false;
+        
+        const currentWarnings = warning.warnings;
+        currentWarnings.pop();
+        warning.warnings = currentWarnings;
+        warning.warningCount = currentWarnings.length;
+        warning.updatedAt = new Date();
+        await warning.save();
+        return true;
+    } catch (error) {
+        console.error('❌ Error removing warning:', error);
+        return false;
+    }
+}
+
+async function clearWarningsFromDB(groupId, userId) {
+    try {
+        await Warning.destroy({
+            where: { groupId: groupId, userId: userId }
+        });
+        return true;
+    } catch (error) {
+        console.error('❌ Error clearing warnings:', error);
+        return false;
+    }
+}
+
+// ====================================
+// MUTE FUNCTIONS
+// ====================================
+
+async function muteUserInDB(groupId, userId, duration, reason = 'No reason', mutedBy = null) {
+    try {
+        const until = new Date(Date.now() + duration);
+        
+        await MutedUser.upsert({
+            groupId: groupId,
+            userId: userId,
+            until: until,
+            reason: reason,
+            mutedBy: mutedBy
+        });
+        return true;
+    } catch (error) {
+        console.error('❌ Error muting user:', error);
+        return false;
+    }
+}
+
+async function unmuteUserInDB(groupId, userId) {
+    try {
+        await MutedUser.destroy({
+            where: { groupId: groupId, userId: userId }
+        });
+        return true;
+    } catch (error) {
+        console.error('❌ Error unmuting user:', error);
+        return false;
+    }
+}
+
+async function isUserMutedInDB(groupId, userId) {
+    try {
+        const muted = await MutedUser.findOne({
+            where: {
+                groupId: groupId,
+                userId: userId,
+                until: { [Sequelize.Op.gt]: new Date() }
+            }
+        });
+        return muted !== null;
+    } catch (error) {
+        console.error('❌ Error checking mute:', error);
+        return false;
+    }
+}
+
+async function getMutedUsersInDB(groupId) {
+    try {
+        const muted = await MutedUser.findAll({
+            where: {
+                groupId: groupId,
+                until: { [Sequelize.Op.gt]: new Date() }
+            }
+        });
+        return muted;
+    } catch (error) {
+        console.error('❌ Error getting muted users:', error);
+        return [];
+    }
+}
+
+// ====================================
+// ANTI-SPAM FUNCTIONS
+// ====================================
+
+async function trackMessageForSpam(groupId, userId) {
+    try {
+        const now = new Date();
+        const resetTime = new Date(now.getTime() + 60000);
+        
+        let tracker = await SpamTracker.findOne({
+            where: { groupId: groupId, userId: userId }
+        });
+        
+        if (!tracker) {
+            tracker = await SpamTracker.create({
+                groupId: groupId,
+                userId: userId,
+                messageCount: 1,
+                firstMessageTime: now,
+                lastMessageTime: now,
+                resetTime: resetTime
+            });
+        } else {
+            if (new Date() > tracker.resetTime) {
+                tracker.messageCount = 1;
+                tracker.firstMessageTime = now;
+                tracker.resetTime = resetTime;
+            } else {
+                tracker.messageCount += 1;
+            }
+            tracker.lastMessageTime = now;
+            await tracker.save();
+        }
+        
+        return tracker.messageCount;
+    } catch (error) {
+        console.error('❌ Error tracking spam:', error);
+        return 0;
+    }
+}
+
+// ====================================
+// EXPORTS
+// ====================================
+
+module.exports = {
+    // Database instance
+    DATABASE,
+    
+    // Session functions
+    saveSessionToDB,
+    getSessionFromDB,
+    deleteSessionFromDB,
+    getAllSessionsFromDB,
+    
+    // Config functions
+    getUserConfigFromDB,
+    updateUserConfigInDB,
+    
+    // Pairing functions
+    savePairingCodeToDB,
+    getPairingCodeFromDB,
+    
+    // Active number functions
+    addActiveNumberToDB,
+    removeActiveNumberFromDB,
+    getAllActiveNumbersFromDB,
+    
+    // Stats functions
+    incrementStats,
+    getStatsForSession,
+    
+    // Group settings functions
+    getGroupSettingsFromDB,
+    updateGroupSettingsInDB,
+    toggleGroupSetting,
+    
+    // Warning functions
+    addWarningToDB,
+    getWarningsFromDB,
+    removeWarningFromDB,
+    clearWarningsFromDB,
+    
+    // Mute functions
+    muteUserInDB,
+    unmuteUserInDB,
+    isUserMutedInDB,
+    getMutedUsersInDB,
+    
+    // Anti-Spam functions
+    trackMessageForSpam,
+    
+    // Models (for advanced use)
+    Session,
+    UserConfig,
+    Stats,
+    PairingCode,
+    ActiveNumber,
+    GroupSettings,
+    Warning,
+    MutedUser,
+    SpamTracker
+};
