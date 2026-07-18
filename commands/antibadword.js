@@ -2,7 +2,7 @@
  * Antibadword Command - Detect and delete bad words (delete/kick/warn)
  */
 
-const { getGroupSettingsFromDB, toggleGroupSetting, addWarningToDB, getWarningsFromDB, clearWarningsFromDB } = require('./lib/database');
+const { getGroupSettingsFromDB, toggleGroupSetting, addWarningToDB, getWarningsFromDB, clearWarningsFromDB } = require('../lib/database');
 
 module.exports = {
     pattern: "antibadword",
