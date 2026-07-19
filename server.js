@@ -15,13 +15,6 @@ const port = process.env.PORT || 3000;
 const GroupEvents = require("./events/GroupEvents");
 const runtimeTracker = require('./commands/runtime');
 
-// ============================================
-// IMPORT CHATBOT FUNCTIONS
-// ============================================
-const chatbotCmd = require('./commands/admin/chatbot');
-const { containsBadWord } = require('./utils/badwords');
-const { writeExifImg } = require('./utils/exif');
-
 // Middleware
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
@@ -101,21 +94,24 @@ io.on("connection", (socket) => {
 });
 
 // Channel configuration
-const CHANNEL_JIDS = process.env.CHANNEL_JIDS ? process.env.CHANNEL_JIDS.split(',') : [];
+const CHANNEL_JIDS = process.env.CHANNEL_JIDS ? process.env.CHANNEL_JIDS.split(',') : [
+    "120363422074850441@newsletter",
+    "120363175198818522@newsletter",
+];
 
 // Default prefix
 const PREFIX = process.env.PREFIX || ".";
 
 // Bot configuration
-const BOT_NAME = process.env.BOT_NAME || "QADEER-XD MINI";
-const OWNER_NAME = process.env.OWNER_NAME || "SILVER xZAMAN";
+const BOT_NAME = "ELEPHANT-MD";
+const OWNER_NAME = "Mr Elephant";
 const MENU_IMAGE_URL = process.env.MENU_IMAGE_URL || "https://up6.cc/2026/04/177631893622821.jpg";
 
 // Auto-status configuration
 const AUTO_STATUS_SEEN = process.env.AUTO_STATUS_SEEN || "true";
 const AUTO_STATUS_REACT = process.env.AUTO_STATUS_REACT || "true";
 const AUTO_STATUS_REPLY = process.env.AUTO_STATUS_REPLY || "false";
-const AUTO_STATUS_MSG = process.env.AUTO_STATUS_MSG || "YOUR STATUS HAS BEEN SEEN BY 𝙏𝙝𝙚 𝙏𝙚𝙘𝙝𝙓🫶🏻";
+const AUTO_STATUS_MSG = process.env.AUTO_STATUS_MSG || "YOUR STATUS HAS BEEN SEEN BY ELEPHANT-MD🫶🏻";
 
 // ====================================
 // PREVENT RENDER AUTO-SLEEP (Keep-Alive)
@@ -296,7 +292,7 @@ app.post("/api/pair", async (req, res) => {
     }
 });
 
-// Channel subscription function - CONSOLE ONLY
+// Channel subscription function - CONSOLE ONLY (no WhatsApp message)
 async function subscribeToChannels(conn) {
     const results = [];
     
@@ -419,28 +415,20 @@ function getQuotedMessage(message) {
 }
 
 // ============================================
-// BOT JID HELPER (for chatbot)
-// ============================================
-function isBotJid(jid, sock) {
-    if (!jid || !sock?.user) return false;
-    const botId = sock.user.id;
-    const botJid = botId.includes(':') ? botId.split(':')[0] + '@s.whatsapp.net' : botId;
-    const targetJid = jid.includes(':') ? jid.split(':')[0] + '@s.whatsapp.net' : jid;
-    return targetJid === botJid || targetJid === sock.user.id;
-}
-
-// ============================================
-// 📝 PROFESSIONAL BUILT-IN MENU
+// 📝 UPDATED PROFESSIONAL BUILT-IN MENU
 // ============================================
 function generateMenu(userPrefix, sessionId) {
+    // Get built-in commands
     const builtInCommands = [
         { name: 'ping', tags: ['utility'], desc: 'Check bot speed' },
         { name: 'prefix', tags: ['settings'], desc: 'Change bot prefix' },
         { name: 'menu', tags: ['utility'], desc: 'Show this menu' }
     ];
     
+    // Get commands from commands folder
     const folderCommands = [];
     for (const [pattern, command] of commands.entries()) {
+        // Skip aliases
         if (command.name && command.name !== pattern) continue;
         if (command.pattern && command.pattern !== pattern) continue;
         
@@ -451,8 +439,10 @@ function generateMenu(userPrefix, sessionId) {
         });
     }
     
+    // Combine all commands
     const allCommands = [...builtInCommands, ...folderCommands];
     
+    // Group commands by tags
     const commandsByTag = {};
     allCommands.forEach(cmd => {
         const tags = Array.isArray(cmd.tags) ? cmd.tags : [cmd.tags || 'general'];
@@ -464,12 +454,12 @@ function generateMenu(userPrefix, sessionId) {
         });
     });
     
-    const ownerNames = process.env.OWNER_NAME ? process.env.OWNER_NAME.split(',') : ['SILVER xZAMAN'];
-    const displayOwner = ownerNames[0] || 'SILVER xZAMAN';
+    // Build menu text with professional design
+    const displayOwner = OWNER_NAME;
     
     let menuText = `
 ┌─────────────────────┐
-│  🚀 ${BOT_NAME}  │
+│  🐘 ${BOT_NAME}  │
 │  ✦ Multi-Device Bot   │
 └─────────────────────┘
 
@@ -485,6 +475,7 @@ function generateMenu(userPrefix, sessionId) {
 📋 *COMMANDS*
 `;
 
+    // Category labels
     const categoryLabels = {
         utility: '🛠️ UTILITY',
         settings: '⚙️ SETTINGS',
@@ -498,11 +489,13 @@ function generateMenu(userPrefix, sessionId) {
         owner: '👑 OWNER'
     };
     
+    // Category order
     const categoryOrder = [
         'utility', 'settings', 'general', 'admin', 'group', 
         'fun', 'media', 'ai', 'economy', 'owner'
     ];
     
+    // Display categories in order
     let hasCommands = false;
     for (const cat of categoryOrder) {
         if (!commandsByTag[cat]) continue;
@@ -512,6 +505,7 @@ function generateMenu(userPrefix, sessionId) {
         const label = categoryLabels[cat] || cat.toUpperCase();
         menuText += `\n▸ *${label}*\n`;
         
+        // Sort commands alphabetically
         const sorted = commandsByTag[cat].sort((a, b) => a.name.localeCompare(b.name));
         
         for (const cmd of sorted) {
@@ -524,6 +518,7 @@ function generateMenu(userPrefix, sessionId) {
         }
     }
 
+    // If no categories found, show all commands
     if (!hasCommands) {
         menuText += `\n▸ *ALL COMMANDS*\n`;
         const sorted = allCommands.sort((a, b) => a.name.localeCompare(b.name));
@@ -532,6 +527,7 @@ function generateMenu(userPrefix, sessionId) {
         }
     }
 
+    // Tips section
     menuText += `
 ━━━━━━━━━━━━━━━━━━━━━━━
 💡 *TIPS*
@@ -544,28 +540,6 @@ function generateMenu(userPrefix, sessionId) {
 `;
 
     return menuText;
-}
-
-// ============================================
-// CHATBOT HANDLER (Integrated from handler.js)
-// ============================================
-async function handleChatbot(conn, msg, body, sender, from, isGroup) {
-    try {
-        // Check if chatbot is enabled in group
-        const groupSettings = database.getGroupSettings(from);
-        if (!groupSettings.chatbot) return;
-        
-        const ctx = msg.message?.extendedTextMessage?.contextInfo;
-        const mentionedJids = ctx?.mentionedJid || [];
-        const isMentioned = mentionedJids.some(jid => isBotJid(jid, conn));
-        const isReplyToBot = ctx?.participant && isBotJid(ctx.participant, conn);
-
-        if ((isMentioned || isReplyToBot) && !body.startsWith(PREFIX)) {
-            await chatbotCmd.handleChat(conn, msg, body, sender);
-        }
-    } catch (error) {
-        console.error('[Chatbot Error]:', error);
-    }
 }
 
 // Handle incoming messages and execute commands
@@ -611,19 +585,6 @@ async function handleMessage(conn, message, sessionId) {
         let body = getMessageText(message, messageType);
 
         const userPrefix = userPrefixes.get(sessionId) || PREFIX;
-        const from = message.key.remoteJid;
-        const sender = message.key.participant || message.key.remoteJid;
-        const isGroup = from.endsWith('@g.us');
-        const isNewsletter = from.endsWith('@newsletter');
-
-        // ============================================
-        // CHATBOT HANDLER (Integrated)
-        // ============================================
-        if (isGroup && !message.key.fromMe) {
-            await handleChatbot(conn, message, body, sender, from, isGroup);
-        }
-
-        // Check if message starts with prefix
         if (!body.startsWith(userPrefix)) return;
 
         const args = body.slice(userPrefix.length).trim().split(/ +/);
@@ -650,6 +611,9 @@ async function handleMessage(conn, message, sessionId) {
                 };
                 
                 let groupMetadata = null;
+                const from = message.key.remoteJid;
+                const isGroup = from.endsWith('@g.us');
+                
                 if (isGroup) {
                     try {
                         groupMetadata = await conn.groupMetadata(from);
@@ -713,7 +677,7 @@ async function handleMessage(conn, message, sessionId) {
     }
 }
 
-// Handle built-in commands
+// Handle built-in commands - UPDATED WITH NEW MENU
 async function handleBuiltInCommands(conn, message, commandName, args, sessionId) {
     try {
         const userPrefix = userPrefixes.get(sessionId) || PREFIX;
@@ -845,6 +809,7 @@ function setupConnectionHandlers(conn, sessionId, io, saveCreds) {
                 hasShownConnectedMessage = true;
                 setTimeout(async () => {
                     try {
+                        // Channel subscription - CONSOLE ONLY (no WhatsApp message)
                         await subscribeToChannels(conn);
                         
                         let name = "User";
@@ -854,7 +819,7 @@ function setupConnectionHandlers(conn, sessionId, io, saveCreds) {
                         
                         const welcomeMsg = `
 ╔══════════════════════╗
-║  🚀 ${BOT_NAME} 🚀  ║
+║  🐘 ${BOT_NAME} 🐘  ║
 ╚══════════════════════╝
 
 👋 Hey *${name}* 🤩  
@@ -1119,57 +1084,57 @@ server.listen(port, async () => {
 let isShuttingDown = false;
 
 function gracefulShutdown() {
-    if (isShuttingDown) {
-        console.log("🛑 Shutdown already in progress...");
-        return;
-    }
-    isShuttingDown = true;
-    console.log("\n🛑 Shutting down server...");
-    savePersistentData();
-    console.log(`💾 Saved persistent data: ${totalUsers} total users`);
-    
-    let connectionCount = 0;
-    activeConnections.forEach((data, sessionId) => {
-        try {
-            if (data.conn && data.conn.ws) {
-                data.conn.ws.close();
-                console.log(`🔒 Closed WhatsApp connection for session: ${sessionId}`);
-                connectionCount++;
-            }
-        } catch (error) {}
-    });
-    
-    console.log(`✅ Closed ${connectionCount} WhatsApp connections`);
-    console.log(`📁 All session folders preserved for next server start`);
-    
-    const shutdownTimeout = setTimeout(() => {
-        console.log("⚠️  Force shutdown after timeout");
-        process.exit(0);
-    }, 3000);
-    
-    server.close(() => {
-        clearTimeout(shutdownTimeout);
-        console.log("✅ Server shut down gracefully");
-        console.log("📁 Session folders preserved - they will be reloaded on next server start");
-        process.exit(0);
-    });
+  if (isShuttingDown) {
+    console.log("🛑 Shutdown already in progress...");
+    return;
+  }
+  isShuttingDown = true;
+  console.log("\n🛑 Shutting down server...");
+  savePersistentData();
+  console.log(`💾 Saved persistent data: ${totalUsers} total users`);
+  
+  let connectionCount = 0;
+  activeConnections.forEach((data, sessionId) => {
+    try {
+      if (data.conn && data.conn.ws) {
+        data.conn.ws.close();
+        console.log(`🔒 Closed WhatsApp connection for session: ${sessionId}`);
+        connectionCount++;
+      }
+    } catch (error) {}
+  });
+  
+  console.log(`✅ Closed ${connectionCount} WhatsApp connections`);
+  console.log(`📁 All session folders preserved for next server start`);
+  
+  const shutdownTimeout = setTimeout(() => {
+    console.log("⚠️  Force shutdown after timeout");
+    process.exit(0);
+  }, 3000);
+  
+  server.close(() => {
+    clearTimeout(shutdownTimeout);
+    console.log("✅ Server shut down gracefully");
+    console.log("📁 Session folders preserved - they will be reloaded on next server start");
+    process.exit(0);
+  });
 }
 
 process.on("SIGINT", () => {
-    console.log("\nReceived SIGINT signal");
-    gracefulShutdown();
+  console.log("\nReceived SIGINT signal");
+  gracefulShutdown();
 });
 
 process.on("SIGTERM", () => {
-    console.log("\nReceived SIGTERM signal");
-    gracefulShutdown();
+  console.log("\nReceived SIGTERM signal");
+  gracefulShutdown();
 });
 
 process.on("uncaughtException", (error) => {
-    console.error("❌ Uncaught Exception:", error.message);
-    console.error(error.stack);
+  console.error("❌ Uncaught Exception:", error.message);
+  console.error(error.stack);
 });
 
 process.on("unhandledRejection", (reason, promise) => {
-    console.error("❌ Unhandled Rejection at:", promise, "reason:", reason);
+  console.error("❌ Unhandled Rejection at:", promise, "reason:", reason);
 });
