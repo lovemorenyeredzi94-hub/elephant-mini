@@ -807,7 +807,8 @@ case 'commands':
         }, { quoted: message });
     }
     return true;
-
+    }
+  }
 // Setup connection event handlers
 function setupConnectionHandlers(conn, sessionId, io, saveCreds) {
     let hasShownConnectedMessage = false;
