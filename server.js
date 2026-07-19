@@ -417,12 +417,15 @@ function getQuotedMessage(message) {
 // ============================================
 // 📝 UPDATED PROFESSIONAL BUILT-IN MENU
 // ============================================
+// ============================================
+// 📝 PROFESSIONAL BUILT-IN MENU (Clean Design)
+// ============================================
 function generateMenu(userPrefix, sessionId) {
     // Get built-in commands
     const builtInCommands = [
-        { name: 'ping', tags: ['utility'], desc: 'Check bot speed' },
-        { name: 'prefix', tags: ['settings'], desc: 'Change bot prefix' },
-        { name: 'menu', tags: ['utility'], desc: 'Show this menu' }
+        { name: 'ping', tags: ['utility'] },
+        { name: 'prefix', tags: ['settings'] },
+        { name: 'menu', tags: ['utility'] }
     ];
     
     // Get commands from commands folder
@@ -432,10 +435,15 @@ function generateMenu(userPrefix, sessionId) {
         if (command.name && command.name !== pattern) continue;
         if (command.pattern && command.pattern !== pattern) continue;
         
+        // Get category
+        let category = command.category || 'general';
+        if (command.tags && Array.isArray(command.tags)) {
+            category = command.tags[0] || category;
+        }
+        
         folderCommands.push({
             name: pattern,
-            tags: command.tags || command.category ? [command.category] : ['general'],
-            desc: command.desc || command.description || 'No description'
+            tags: [category]
         });
     }
     
@@ -457,42 +465,53 @@ function generateMenu(userPrefix, sessionId) {
     // Build menu text with professional design
     const displayOwner = OWNER_NAME;
     
+    // ============================================
+    // PROFESSIONAL MENU DESIGN
+    // ============================================
     let menuText = `
-┌─────────────────────┐
-│  🐘 ${BOT_NAME}  │
-│  ✦ Multi-Device Bot   │
-└─────────────────────┘
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃   🐘 ${BOT_NAME}                    ┃
+┃   ─────────────────────────        ┃
+┃   ✦ Multi-Device WhatsApp Bot      ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 
-👋 Hello *User*!
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃   📊 BOT INFO                     ┃
+┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫
+┃   Prefix    : ${userPrefix}                  ┃
+┃   Commands  : ${allCommands.length}                 ┃
+┃   Owner     : ${displayOwner}           ┃
+┃   Version   : 7.0.0                      ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 
-📊 *BOT INFO*
-├─ Prefix    : ${userPrefix}
-├─ Commands  : ${allCommands.length}
-├─ Owner     : ${displayOwner}
-└─ Version   : 7.0.0
-
-━━━━━━━━━━━━━━━━━━━━━━━
-📋 *COMMANDS*
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃   📋 COMMANDS LIST                ┃
+┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫
 `;
 
-    // Category labels
+    // Category labels with emojis
     const categoryLabels = {
-        utility: '🛠️ UTILITY',
-        settings: '⚙️ SETTINGS',
+        utility: '🛠 UTILITY',
+        settings: '⚙ SETTINGS',
         general: '📌 GENERAL',
-        admin: '🛡️ ADMIN',
+        admin: '🛡 ADMIN',
         group: '👥 GROUP',
         fun: '🎮 FUN',
         media: '🎬 MEDIA',
         ai: '🤖 AI',
         economy: '💰 ECONOMY',
-        owner: '👑 OWNER'
+        owner: '👑 OWNER',
+        sticker: '🎨 STICKER',
+        download: '📥 DOWNLOAD',
+        converter: '🔄 CONVERTER',
+        tools: '🔧 TOOLS'
     };
     
     // Category order
     const categoryOrder = [
         'utility', 'settings', 'general', 'admin', 'group', 
-        'fun', 'media', 'ai', 'economy', 'owner'
+        'fun', 'media', 'ai', 'economy', 'owner',
+        'sticker', 'download', 'converter', 'tools'
     ];
     
     // Display categories in order
@@ -503,41 +522,57 @@ function generateMenu(userPrefix, sessionId) {
         
         hasCommands = true;
         const label = categoryLabels[cat] || cat.toUpperCase();
-        menuText += `\n▸ *${label}*\n`;
+        menuText += `┃ ${label}\n`;
+        menuText += `┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫\n`;
         
         // Sort commands alphabetically
         const sorted = commandsByTag[cat].sort((a, b) => a.name.localeCompare(b.name));
         
+        // Display 4 commands per row for cleaner look
+        let row = [];
         for (const cmd of sorted) {
-            const desc = cmd.desc || '';
-            menuText += `  ${userPrefix}${cmd.name}`;
-            if (desc) {
-                menuText += ` — ${desc}`;
-            }
-            menuText += '\n';
+            row.push(`${userPrefix}${cmd.name}`);
         }
+        
+        // Display as 2 columns
+        const colWidth = 16;
+        for (let i = 0; i < row.length; i += 2) {
+            let line = '┃';
+            const col1 = row[i] || '';
+            const col2 = row[i+1] || '';
+            line += ` ${col1.padEnd(colWidth)}`;
+            if (col2) line += ` ${col2.padEnd(colWidth)}`;
+            line += ' ┃';
+            menuText += line + '\n';
+        }
+        menuText += `┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫\n`;
     }
 
-    // If no categories found, show all commands
+    // If no categories found, show all commands in 2 columns
     if (!hasCommands) {
-        menuText += `\n▸ *ALL COMMANDS*\n`;
         const sorted = allCommands.sort((a, b) => a.name.localeCompare(b.name));
-        for (const cmd of sorted) {
-            menuText += `  ${userPrefix}${cmd.name}\n`;
+        const row = sorted.map(cmd => `${userPrefix}${cmd.name}`);
+        const colWidth = 16;
+        for (let i = 0; i < row.length; i += 2) {
+            let line = '┃';
+            const col1 = row[i] || '';
+            const col2 = row[i+1] || '';
+            line += ` ${col1.padEnd(colWidth)}`;
+            if (col2) line += ` ${col2.padEnd(colWidth)}`;
+            line += ' ┃';
+            menuText += line + '\n';
         }
+        menuText += `┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫\n`;
     }
 
     // Tips section
-    menuText += `
-━━━━━━━━━━━━━━━━━━━━━━━
-💡 *TIPS*
-├─ ${userPrefix}help <command>  → Get command help
-├─ ${userPrefix}prefix <new>    → Change prefix
-└─ ${userPrefix}menu            → Show this menu
-
-━━━━━━━━━━━━━━━━━━━━━━━
-> *ᴘᴏᴡᴇʀᴇᴅ ʙʏ ${displayOwner} • ${BOT_NAME}*
-`;
+    menuText += `┃ 💡 TIPS                         ┃\n`;
+    menuText += `┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫\n`;
+    menuText += `┃  📌 ${userPrefix}help <cmd>          ┃\n`;
+    menuText += `┃  📌 ${userPrefix}prefix <new>       ┃\n`;
+    menuText += `┃  📌 ${userPrefix}menu              ┃\n`;
+    menuText += `┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n\n`;
+    menuText += `> *ᴘᴏᴡᴇʀᴇᴅ ʙʏ ${displayOwner} • ${BOT_NAME}*\n`;
 
     return menuText;
 }
@@ -746,33 +781,32 @@ async function handleBuiltInCommands(conn, message, commandName, args, sessionId
                 return true;
                 
             case 'menu':
-            case 'help':
-            case 'commands':
-                const menu = generateMenu(userPrefix, sessionId);
-                await conn.sendMessage(from, {
-                    text: menu,
-                    contextInfo: {
-                        forwardingScore: 999,
-                        isForwarded: true,
-                        externalAdReply: {
-                            title: `📋 ${BOT_NAME} - Command Menu`,
-                            body: `⚡ Powered by ${OWNER_NAME}`,
-                            thumbnailUrl: MENU_IMAGE_URL,
-                            mediaType: 1,
-                            renderLargerThumbnail: true
-                        }
-                    }
-                }, { quoted: message });
-                return true;
-                
-            default:
-                return false;
-        }
-    } catch (error) {
-        console.error("Error in built-in command:", error);
-        return false;
+case 'help':
+case 'commands':
+    try {
+        const menu = generateMenu(userPrefix, sessionId);
+        await conn.sendMessage(from, {
+            text: menu,
+            contextInfo: {
+                forwardingScore: 999,
+                isForwarded: true,
+                externalAdReply: {
+                    title: `🐘 ${BOT_NAME}`,
+                    body: `⚡ Powered by ${OWNER_NAME}`,
+                    thumbnailUrl: MENU_IMAGE_URL,
+                    mediaType: 1,
+                    renderLargerThumbnail: true
+                }
+            }
+        }, { quoted: message });
+    } catch (menuError) {
+        console.error('❌ Menu error:', menuError);
+        // Simple fallback menu
+        await conn.sendMessage(from, {
+            text: `🐘 ${BOT_NAME} Menu\n\n📌 Prefix: ${userPrefix}\n\nCommands:\n${userPrefix}ping\n${userPrefix}prefix\n${userPrefix}menu\n\nPowered by ${OWNER_NAME}`
+        }, { quoted: message });
     }
-}
+    return true;
 
 // Setup connection event handlers
 function setupConnectionHandlers(conn, sessionId, io, saveCreds) {
